@@ -1,0 +1,89 @@
+# Core data processing
+pandas>=1.5.0
+numpy>=1.21.0
+
+# Database connectivity
+pyodbc>=4.0.34
+sqlalchemy>=1.4.0
+
+# Cloud services
+google-cloud-bigquery>=3.4.0
+boto3>=1.26.0
+azure-identity>=1.12.0
+azure-storage-file-datalake>=12.8.0
+azure-synapse-artifacts>=1.0.0
+azure-keyvault-secrets>=4.6.0
+
+# Salesforce
+simple-salesforce>=1.12.0
+
+# Authentication and security
+msal>=1.20.0
+PyJWT>=2.4.0
+pycryptodome>=3.15.0
+
+# Web requests
+requests>=2.28.0
+urllib3>=1.26.0
+
+# AI/ML
+openai>=0.27.0
+scikit-learn>=1.1.0
+
+# Configuration and serialization
+pyyaml>=6.0
+jsonschema>=4.17.0
+
+# Monitoring and metrics
+prometheus-client>=0.15.0
+
+# Caching
+redis>=4.5.0
+
+# Async support
+aiohttp>=3.8.0
+
+# Graph processing
+networkx>=2.8.0
+
+# Cryptography
+cryptography>=38.0.0
+
+# Data validation
+pydantic>=1.10.0
+
+# Visualization
+matplotlib>=3.5.0
+seaborn>=0.11.0
+plotly>=5.12.0
+
+# Web UI
+streamlit>=1.22.0
+streamlit-chat>=0.1.0
+
+# SQL parsing
+sqlparse>=0.4.0
+
+# File handling
+zipfile36>=0.1.3
+openpyxl>=3.0.0
+xlrd>=2.0.0
+
+# Statistical analysis
+scipy>=1.9.0
+
+# Testing
+pytest>=7.1.0
+pytest-asyncio>=0.20.0
+pytest-cov>=3.0.0
+
+# Development tools
+black>=22.6.0
+flake8>=5.0.0
+mypy>=0.991
+isort>=5.10.0
+
+# Additional utilities
+python-dotenv>=0.21.0
+tqdm>=4.64.0
+click>=8.1.0

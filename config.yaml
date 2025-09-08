@@ -1,0 +1,147 @@
+openai:
+  api_key: "your-openai-api-key-here"
+  model: "gpt-4"
+  temperature: 0.3
+  max_tokens: 2000
+
+fabric:
+  tenant_id: "your-tenant-id-here"
+  client_id: "your-client-id-here"
+  client_secret: "your-client-secret-here"
+  workspace_id: "your-workspace-id-here"
+  pipeline_id: "your-pipeline-id-here"  # Optional
+
+data_sources:
+  sales_data:
+    type: "sql_server"
+    server: "your-server-name.database.windows.net"
+    database: "your-database-name"
+    username: "your-username"
+    password: "your-password"
+    driver: "ODBC Driver 17 for SQL Server"
+  
+  customer_data:
+    type: "postgresql"
+    host: "your-postgres-server"
+    port: 5432
+    database: "your-database"
+    username: "your-username"
+    password: "your-password"
+  
+  product_catalog:
+    type: "csv"
+    file_path: "/path/to/your/product_catalog.csv"
+  
+  financial_data:
+    type: "excel"
+    file_path: "/path/to/your/financial_data.xlsx"
+  
+  api_data:
+    type: "api"
+    url: "https://api.example.com/data"
+    headers:
+      Authorization: "Bearer your-api-token"
+    params:
+      limit: 100
+  
+  bigquery_data:
+    type: "bigquery"
+    project_id: "your-gcp-project-id"
+    credentials_path: "/path/to/your/service-account-key.json"
+  
+  salesforce_data:
+    type: "salesforce"
+    username: "your-salesforce-username"
+    password: "your-salesforce-password"
+    security_token: "your-security-token"
+    sandbox: false
+  
+  s3_data:
+    type: "s3"
+    access_key_id: "your-aws-access-key"
+    secret_access_key: "your-aws-secret-key"
+    region: "us-east-1"
+    bucket_name: "your-bucket-name"
+    prefix: "data/"
+  
+  onelake_data:
+    type: "onelake"
+    workspace_id: "your-workspace-id"
+
+data_quality:
+  enabled: true
+  max_null_percentage: 30.0
+  max_duplicate_percentage: 10.0
+  check_outliers: true
+  outlier_method: "zscore"  # Options: zscore, iqr
+  outlier_threshold: 3.0
+  check_data_types: true
+  check_value_ranges: true
+  custom_rules:
+    - type: "column_pattern"
+      pattern: "^[A-Za-z0-9_]+$"
+      columns: ["product_id", "customer_id"]
+      severity: "warning"
+
+max_workers: 4
+data_chunk_size: 10000
+
+enterprise_security:
+  conditional_access: true
+  mfa_required: true
+  device_compliance_required: true
+  ip_restrictions: []
+
+compliance:
+  data_classification: "Confidential"
+  retention_policy: "7_years"
+  audit_logging: true
+  standards: ["GDPR", "SOX", "HIPAA"]
+
+deployment:
+  environment: "production"
+  pipeline_stages: ["dev", "test", "prod"]
+  auto_deployment: false
+  approval_required: true
+
+monitoring:
+  application_insights: "your-application-insights-connection-string"
+  log_analytics_workspace: "your-log-analytics-workspace-id"
+  prometheus_endpoint: "http://prometheus:9090"
+
+integrations:
+  azure_devops_project: "https://dev.azure.com/your-org/your-project"
+  teams_webhook: "https://outlook.office.com/webhook/your-webhook-url"
+  key_vault_url: "https://your-key-vault-name.vault.azure.net/"
+
+scaling:
+  auto_scaling:
+    enabled: true
+    min_capacity: "F2"
+    max_capacity: "F64"
+    scale_triggers:
+      cpu_threshold: 80
+      memory_threshold: 85
+      concurrent_users: 1000
+  load_balancing:
+    enabled: true
+    strategy: "round_robin"
+    health_check_interval: 30
+  caching:
+    redis_cluster:
+      enabled: true
+      nodes: 3
+      memory_per_node: "8GB"
+  performance_optimization:
+    query_timeout: 300
+    max_concurrent_queries: 50
+    incremental_refresh: true
+
+multi_geo_config:
+  home_region: "West Europe"
+  multi_geo_capacities: []
+  data_residency_compliance: "GDPR"
+
+max_sql_generation_try: 3
+max_python_script_check: 3
+sandbox_path: "/tmp/sandbox"
