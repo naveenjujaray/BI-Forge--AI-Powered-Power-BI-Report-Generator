@@ -44,6 +44,8 @@ The Power BI AI Generator is an enterprise-grade solution that leverages OpenAI'
 
 ![Reporting with LLM](/assets/flowchart.png)
 
+Ref: [https://medium.com/@mail2mhossain/llm-powered-reporting-transforming-traditional-reporting-into-ai-driven-solutions-14a188793760](https://medium.com/@mail2mhossain/llm-powered-reporting-transforming-traditional-reporting-into-ai-driven-solutions-14a188793760)
+
 The system follows a sophisticated workflow:
 1. **Data Ingestion**: Connects to multiple data sources (SQL, NoSQL, APIs, cloud storage)
 2. **Query Processing**: Uses NLP to understand business requirements
