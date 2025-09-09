@@ -159,7 +159,7 @@ The system follows a modular, enterprise-grade architecture with clear separatio
 1. **Clone the repository**
    ```bash
    git clone https://github.com/naveenjujaray/BI-Forge--AI-Powered-Power-BI-Report-Generation-Generator.git
-   cd BI-Forge--AI-Powered-Power-BI-Report-Generation-Generator
+   cd BI-Forge--AI-Powered-Power-BI-Report-Generator
 
    ```
 
