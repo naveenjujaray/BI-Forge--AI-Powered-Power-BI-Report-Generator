@@ -363,12 +363,13 @@ DATA_QUALITY_SCORE = Gauge('powerbi_data_quality_score', 'Data quality score', [
 ### Project Structure
 ```
 BI-Forge--AI-Powered-Power-BI-Report-Generation-Generator/
-├── generate_report.py         # Main application code
-├── config.yaml                # Configuration file
-├── requirements.txt           # Python dependencies
-├── assets/                    # assets ex: images, pdf..etc
-├── README                     # GitHub README
-└── LICENSE                    # MIT License
+├── generate_report.py           # Main application code V1
+├── generate_report_langchain.py # LangChain integrated Main application code V2
+├── config.yaml                  # Configuration file
+├── requirements.txt             # Python dependencies
+├── assets/                      # assets ex: images, pdf..etc
+├── README                       # GitHub README
+└── LICENSE                      # MIT License
 ```
 
 ### Development Setup
