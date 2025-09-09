@@ -670,9 +670,9 @@ BI-Forge--AI-Powered-Power-BI-Report-Generation-Generator/
 
 ---
 
+## Contributing
 
-
-## Future Updates List 📋
+### Future Updates List 📋
 
 ### 1. Syntax and Logging Fixes 🔧
 - Fix unclosed logger handler list in `logging.basicConfig()` 🔌
@@ -723,10 +723,6 @@ BI-Forge--AI-Powered-Power-BI-Report-Generation-Generator/
 - Complete type hints for all public methods and classes 🔤
 - Separate CLI entrypoint into its own module 🖥️
 - Implement proper CLI using `argparse` or `click` 🎛️
----
-
-## Contributing
-
 Please follow these steps:
 
 1. Fork the repository
