@@ -636,6 +636,7 @@ BI-Forge--AI-Powered-Power-BI-Report-Generation-Generator/
 ├── generate_report_v3.py        # Kafka integrated Main application code V3
 ├── config.yaml                  # Configuration file
 ├── requirements.txt             # Python dependencies
+├── archive/                     # older files
 ├── assets/                      # assets ex: images, pdf..etc
 ├── README.md                    # This file
 └── LICENSE                      # MIT License
