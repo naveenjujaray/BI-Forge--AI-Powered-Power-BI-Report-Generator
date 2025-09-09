@@ -7,13 +7,20 @@ import base64
 import logging
 import tempfile
 import zipfile
+import asyncio
+import threading
 from datetime import datetime, timedelta
 from functools import wraps, lru_cache
-from typing import Dict, List, Optional, Any, Union, Tuple
+from typing import Dict, List, Optional, Any, Union, Tuple, Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import asynccontextmanager
+
 # Standard library imports
 import ast
 import secrets
 import hashlib
+from collections import defaultdict
+
 # Third-party imports
 import pandas as pd
 import numpy as np
@@ -22,33 +29,41 @@ import pyodbc
 import yaml
 import jwt
 from scipy import stats
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from circuitbreaker import circuit
+from prometheus_client import Counter, Gauge, Histogram, start_http_server
+
 # Crypto imports
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
 from Crypto.Protocol.KDF import PBKDF2
+
 # Azure imports
 from azure.identity import DefaultAzureCredential
 from azure.storage.filedatalake import DataLakeServiceClient
 from azure.keyvault.secrets import SecretClient
 from azure.synapse.artifacts import ArtifactsClient
 from msal import ConfidentialClientApplication
+
 # Microsoft Fabric imports
 from microsoft.fabric.core import FabricClient
 from microsoft.fabric.items import ItemClient
 from microsoft.fabric.workspaces import WorkspaceClient
+
 # Google Cloud imports
 from google.cloud import bigquery
 from google.oauth2 import service_account
+
 # Salesforce imports
 from simple_salesforce import Salesforce
-# Monitoring and caching imports
-import redis
-import tenacity
-from prometheus_client import Counter, Gauge, Histogram, start_http_server
+
 # OpenAI imports
 import openai
 from openai import OpenAI
-# LangChain imports (updated to latest versions)
+
+# LangChain imports
 from langchain_openai import ChatOpenAI, AzureChatOpenAI
 from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
 from langchain.chains import LLMChain, SequentialChain, TransformChain
@@ -57,12 +72,36 @@ from langchain_core.callbacks import CallbackManager
 from langchain.agents import AgentExecutor, create_openai_tools_agent
 from langchain_core.tools import tool
 from langchain.memory import ConversationBufferMemory
+from langgraph import StateGraph, MessageGraph
+from langsmith import Client
+from langsmith.run_helpers import traceable
+
 # SQL parsing
 import sqlparse
+
 # Pydantic imports
 from pydantic import BaseModel, field_validator
-# Power BI Template handling
-from powerbi_template import PowerBITemplate  # This would be a custom module
+
+# Database connection pooling
+from sqlalchemy import create_engine, pool
+
+# FastAPI imports
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.utils import get_openapi
+
+# Airflow imports (optional)
+try:
+    from airflow import DAG
+    from airflow.operators.python import PythonOperator
+    from airflow.utils.dates import days_ago
+    AIRFLOW_AVAILABLE = True
+except ImportError:
+    AIRFLOW_AVAILABLE = False
+
+# Testing imports
+import pytest
+from unittest.mock import Mock, patch
 
 # Environment variable support
 try:
@@ -90,6 +129,11 @@ ERROR_COUNT = Counter('powerbi_errors_total', 'Total Power BI errors', ['type'])
 DATA_QUALITY_SCORE = Gauge('powerbi_data_quality_score', 'Data quality score', ['data_source'])
 SCHEMA_DRIFT_DETECTED = Counter('powerbi_schema_drift_detected', 'Schema drift detected', ['data_source'])
 FABRIC_DEPLOYMENT_COUNT = Counter('fabric_deployment_total', 'Total Fabric deployments', ['status'])
+LANGCHAIN_OPERATION_COUNT = Counter('langchain_operations_total', 'Total LangChain operations', ['operation'])
+WORKER_COUNT = Gauge('powerbi_worker_count', 'Current number of workers')
+
+# Rate limiting setup
+limiter = Limiter(key_func=get_remote_address)
 
 def start_metrics_server(port: int = 8000) -> None:
     """Start Prometheus metrics server."""
@@ -109,6 +153,8 @@ class AIConfig(BaseModel):
     azure_endpoint: Optional[str] = None
     azure_version: Optional[str] = None
     use_azure: bool = False
+    langsmith_project: Optional[str] = None
+    langsmith_endpoint: Optional[str] = None
 
 class FabricConfig(BaseModel):
     tenant_id: str
@@ -145,6 +191,12 @@ class DataSourceConfig(BaseModel):
     sample_size: Optional[int] = 1000
     dataset_id: Optional[str] = None
     connection_string: Optional[str] = None
+    warehouse: Optional[str] = None
+    schema: Optional[str] = None
+    role: Optional[str] = None
+    account: Optional[str] = None
+    connection_pool_size: int = 5
+    connection_timeout: int = 30
 
     @field_validator('type')
     @classmethod
@@ -152,7 +204,7 @@ class DataSourceConfig(BaseModel):
         allowed_types = [
             'sql_server', 'postgresql', 'mysql', 'csv', 'excel', 'api', 
             'bigquery', 'salesforce', 's3', 'redshift', 'onelake', 'semantic_model',
-            'oracle', 'snowflake', 'mongodb'
+            'oracle', 'snowflake', 'mongodb', 'synapse'
         ]
         if v not in allowed_types:
             raise ValueError(f'Invalid source_type: {v}. Allowed types: {", ".join(allowed_types)}')
@@ -175,18 +227,39 @@ class SecurityConfig(BaseModel):
     device_compliance_required: bool = True
     ip_restrictions: List[str] = []
     encryption_key: Optional[str] = None
+    api_key_rotation_days: int = 90
 
 class MonitoringConfig(BaseModel):
     application_insights: str = ""
     log_analytics_workspace: str = ""
     prometheus_endpoint: str = "http://prometheus:9090"
     redis_url: str = "redis://localhost:6379"
+    circuit_breaker_timeout: int = 60
+    rate_limit_requests: int = 100
+    rate_limit_period: int = 60
 
 class VisualizationConfig(BaseModel):
     theme: str = "standard"
     color_palette: List[str] = ["#01B8AA", "#374649", "#FD625E", "#F2C80F", "#4BC0C0"]
     font_family: str = "Segoe UI"
     default_visualization_types: List[str] = ["column", "line", "pie", "card", "table"]
+    enable_custom_visuals: bool = True
+
+class ScalingConfig(BaseModel):
+    enabled: bool = False
+    min_workers: int = 2
+    max_workers: int = 10
+    scale_up_threshold: float = 0.7  # Scale up when 70% of workers are busy
+    scale_down_threshold: float = 0.3  # Scale down when 30% of workers are busy
+    cooldown_period: int = 300  # 5 minutes cooldown between scaling operations
+
+class ApiConfig(BaseModel):
+    enabled: bool = False
+    host: str = "0.0.0.0"
+    port: int = 8000
+    cors_origins: List[str] = ["*"]
+    docs_url: str = "/docs"
+    openapi_url: str = "/openapi.json"
 
 class MainConfig(BaseModel):
     openai: AIConfig
@@ -196,12 +269,16 @@ class MainConfig(BaseModel):
     security: SecurityConfig = SecurityConfig()
     monitoring: MonitoringConfig = MonitoringConfig()
     visualization: VisualizationConfig = VisualizationConfig()
+    scaling: ScalingConfig = ScalingConfig()
+    api: ApiConfig = ApiConfig()
     max_workers: int = 4
     data_chunk_size: int = 10000
     max_sql_generation_try: int = 3
     max_python_script_check: int = 3
     sandbox_path: str = "/tmp/sandbox"
     enable_fabric_deployment: bool = True
+    enable_langsmith: bool = True
+    enable_real_time_refresh: bool = False
 
 def create_default_config() -> Dict[str, Any]:
     """Create a default configuration when config file is missing."""
@@ -212,7 +289,8 @@ def create_default_config() -> Dict[str, Any]:
             "temperature": 0.3,
             "max_tokens": 2000,
             "max_retries": 3,
-            "use_azure": False
+            "use_azure": False,
+            "enable_langsmith": True
         },
         "fabric": {
             "tenant_id": os.getenv("FABRIC_TENANT_ID", ""),
@@ -223,9 +301,30 @@ def create_default_config() -> Dict[str, Any]:
         },
         "data_sources": {},
         "monitoring": {
-            "redis_url": os.getenv("REDIS_URL", "redis://localhost:6379")
+            "redis_url": os.getenv("REDIS_URL", "redis://localhost:6379"),
+            "circuit_breaker_timeout": 60,
+            "rate_limit_requests": 100,
+            "rate_limit_period": 60
         },
-        "enable_fabric_deployment": True
+        "scaling": {
+            "enabled": False,
+            "min_workers": 2,
+            "max_workers": 10,
+            "scale_up_threshold": 0.7,
+            "scale_down_threshold": 0.3,
+            "cooldown_period": 300
+        },
+        "api": {
+            "enabled": False,
+            "host": "0.0.0.0",
+            "port": 8000,
+            "cors_origins": ["*"],
+            "docs_url": "/docs",
+            "openapi_url": "/openapi.json"
+        },
+        "enable_fabric_deployment": True,
+        "enable_langsmith": True,
+        "enable_real_time_refresh": False
     }
 
 def load_config(config_path: str = "config.yaml") -> Dict[str, Any]:
@@ -308,6 +407,115 @@ def verify_jwt_token(token: str, secret_key: str) -> Dict[str, Any]:
         raise ValueError("Token has expired")
     except jwt.InvalidTokenError:
         raise ValueError("Invalid token")
+
+# === Rate Limiting and Circuit Breaker ===
+class RateLimiter:
+    """Simple token bucket rate limiter."""
+    
+    def __init__(self, max_requests: int, period: int):
+        self.max_requests = max_requests
+        self.period = period
+        self.tokens = max_requests
+        self.last_refill = time.time()
+        self.lock = threading.Lock()
+    
+    def consume(self) -> bool:
+        with self.lock:
+            now = time.time()
+            elapsed = now - self.last_refill
+            
+            if elapsed > self.period:
+                self.tokens = self.max_requests
+                self.last_refill = now
+            
+            if self.tokens > 0:
+                self.tokens -= 1
+                return True
+            return False
+
+# === AutoScaler ===
+class AutoScaler:
+    """Dynamic resource scaling for report generation."""
+    
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config.get('scaling', {})
+        self.enabled = self.config.get('enabled', False)
+        self.min_workers = self.config.get('min_workers', 2)
+        self.max_workers = self.config.get('max_workers', 10)
+        self.scale_up_threshold = self.config.get('scale_up_threshold', 0.7)
+        self.scale_down_threshold = self.config.get('scale_down_threshold', 0.3)
+        self.cooldown_period = self.config.get('cooldown_period', 300)
+        
+        self.current_workers = self.min_workers
+        self.last_scale_time = time.time()
+        self.worker_pool = None
+        self.active_tasks = 0
+        self.lock = threading.Lock()
+        
+        if self.enabled:
+            self.worker_pool = ThreadPoolExecutor(max_workers=self.max_workers)
+            WORKER_COUNT.set(self.current_workers)
+            logger.info(f"AutoScaler initialized with {self.current_workers} workers")
+    
+    def _can_scale(self) -> bool:
+        """Check if scaling is allowed based on cooldown period."""
+        return time.time() - self.last_scale_time > self.cooldown_period
+    
+    def _scale_up(self):
+        """Increase the number of workers."""
+        if self.current_workers < self.max_workers and self._can_scale():
+            self.current_workers = min(self.current_workers + 1, self.max_workers)
+            self.last_scale_time = time.time()
+            WORKER_COUNT.set(self.current_workers)
+            logger.info(f"Scaled up to {self.current_workers} workers")
+    
+    def _scale_down(self):
+        """Decrease the number of workers."""
+        if self.current_workers > self.min_workers and self._can_scale():
+            self.current_workers = max(self.current_workers - 1, self.min_workers)
+            self.last_scale_time = time.time()
+            WORKER_COUNT.set(self.current_workers)
+            logger.info(f"Scaled down to {self.current_workers} workers")
+    
+    def register_task_start(self):
+        """Register a new task starting."""
+        with self.lock:
+            self.active_tasks += 1
+            utilization = self.active_tasks / self.current_workers
+            
+            if utilization > self.scale_up_threshold:
+                self._scale_up()
+    
+    def register_task_completion(self):
+        """Register a task completion."""
+        with self.lock:
+            self.active_tasks = max(0, self.active_tasks - 1)
+            utilization = self.active_tasks / self.current_workers
+            
+            if utilization < self.scale_down_threshold:
+                self._scale_down()
+    
+    def submit_task(self, task: Callable, *args, **kwargs):
+        """Submit a task to the worker pool."""
+        if not self.enabled or not self.worker_pool:
+            return task(*args, **kwargs)
+        
+        self.register_task_start()
+        
+        def wrapper():
+            try:
+                return task(*args, **kwargs)
+            finally:
+                self.register_task_completion()
+        
+        future = self.worker_pool.submit(wrapper)
+        return future.result()
+    
+    def shutdown(self):
+        """Shutdown the worker pool."""
+        if self.worker_pool:
+            self.worker_pool.shutdown(wait=True)
+            logger.info("AutoScaler worker pool shutdown complete")
 
 # === Retry Decorator ===
 def retry_with_backoff(retries: int = 3, backoff_factor: float = 1.0):
@@ -1064,6 +1272,11 @@ class BaseDataSource:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.connection = None
+        self.connection_pool = None
+        self.rate_limiter = RateLimiter(
+            config.get('rate_limit_requests', 100),
+            config.get('rate_limit_period', 60)
+        )
     
     def get_schema(self) -> Dict[str, Any]:
         """Get schema information from data source."""
@@ -1088,6 +1301,12 @@ class BaseDataSource:
                 self.connection.close()
             except Exception:
                 pass
+        
+        if hasattr(self, 'connection_pool') and self.connection_pool:
+            try:
+                self.connection_pool.dispose()
+            except Exception:
+                pass
 
 class SQLServerDataSource(BaseDataSource):
     """SQL Server data source implementation."""
@@ -1096,6 +1315,7 @@ class SQLServerDataSource(BaseDataSource):
         super().__init__(config)
         self.connection_string = self._build_connection_string()
         self.sql_validator = SQLQueryValidator()
+        self._init_connection_pool()
     
     def _build_connection_string(self) -> str:
         """Build SQL Server connection string."""
@@ -1110,11 +1330,32 @@ class SQLServerDataSource(BaseDataSource):
         
         return f"DRIVER={{{driver}}};SERVER={server};DATABASE={database};UID={username};PWD={password};Encrypt=yes;TrustServerCertificate=no;"
     
+    def _init_connection_pool(self):
+        """Initialize connection pool."""
+        try:
+            from sqlalchemy import create_engine
+            pool_size = self.config.get('connection_pool_size', 5)
+            timeout = self.config.get('connection_timeout', 30)
+            
+            self.connection_pool = create_engine(
+                f"mssql+pyodbc:///?odbc_connect={self.connection_string}",
+                pool_size=pool_size,
+                pool_timeout=timeout,
+                pool_recycle=3600
+            )
+            logger.info(f"SQL Server connection pool initialized with size {pool_size}")
+        except Exception as e:
+            logger.warning(f"Failed to initialize connection pool: {str(e)}")
+    
     def get_schema(self) -> Dict[str, Any]:
         """Get schema from SQL Server."""
         connection = None
         try:
-            connection = pyodbc.connect(self.connection_string, timeout=30)
+            if self.connection_pool:
+                connection = self.connection_pool.connect()
+            else:
+                connection = pyodbc.connect(self.connection_string, timeout=30)
+            
             cursor = connection.cursor()
             
             schema = {}
@@ -1186,7 +1427,10 @@ class SQLServerDataSource(BaseDataSource):
         """Get sample data from SQL Server."""
         connection = None
         try:
-            connection = pyodbc.connect(self.connection_string, timeout=30)
+            if self.connection_pool:
+                connection = self.connection_pool.connect()
+            else:
+                connection = pyodbc.connect(self.connection_string, timeout=30)
             
             # Get the first table with data
             cursor = connection.cursor()
@@ -1230,6 +1474,7 @@ class PostgreSQLDataSource(BaseDataSource):
         super().__init__(config)
         self.connection_string = self._build_connection_string()
         self.sql_validator = SQLQueryValidator()
+        self._init_connection_pool()
     
     def _build_connection_string(self) -> str:
         """Build PostgreSQL connection string."""
@@ -1244,6 +1489,23 @@ class PostgreSQLDataSource(BaseDataSource):
         
         return f"host={host} port={port} dbname={database} user={username} password={password}"
     
+    def _init_connection_pool(self):
+        """Initialize connection pool."""
+        try:
+            from sqlalchemy import create_engine
+            pool_size = self.config.get('connection_pool_size', 5)
+            timeout = self.config.get('connection_timeout', 30)
+            
+            self.connection_pool = create_engine(
+                f"postgresql+psycopg2://{self.config.get('username')}:{self.config.get('password')}@{self.config.get('host')}:{self.config.get('port')}/{self.config.get('database')}",
+                pool_size=pool_size,
+                pool_timeout=timeout,
+                pool_recycle=3600
+            )
+            logger.info(f"PostgreSQL connection pool initialized with size {pool_size}")
+        except Exception as e:
+            logger.warning(f"Failed to initialize connection pool: {str(e)}")
+    
     def get_schema(self) -> Dict[str, Any]:
         """Get schema from PostgreSQL."""
         import psycopg2
@@ -1251,7 +1513,11 @@ class PostgreSQLDataSource(BaseDataSource):
         
         connection = None
         try:
-            connection = psycopg2.connect(self.connection_string)
+            if self.connection_pool:
+                connection = self.connection_pool.connect()
+            else:
+                connection = psycopg2.connect(self.connection_string)
+            
             cursor = connection.cursor(cursor_factory=psycopg2.extras.DictCursor)
             
             schema = {}
@@ -1325,7 +1591,10 @@ class PostgreSQLDataSource(BaseDataSource):
         
         connection = None
         try:
-            connection = psycopg2.connect(self.connection_string)
+            if self.connection_pool:
+                connection = self.connection_pool.connect()
+            else:
+                connection = psycopg2.connect(self.connection_string)
             
             # Get the first table with data
             cursor = connection.cursor(cursor_factory=psycopg2.extras.DictCursor)
@@ -1527,6 +1796,764 @@ class BigQueryDataSource(BaseDataSource):
             logger.error(f"Error getting sample data from BigQuery: {str(e)}")
             return pd.DataFrame()
 
+class SnowflakeDataSource(BaseDataSource):
+    """Snowflake data source implementation."""
+    
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        self.account = config.get('account')
+        self.user = config.get('username')
+        self.password = config.get('password')
+        self.warehouse = config.get('warehouse')
+        self.database = config.get('database')
+        self.schema = config.get('schema')
+        self.role = config.get('role')
+        
+        if not all([self.account, self.user, self.password]):
+            raise ValueError("Missing required Snowflake connection parameters")
+        
+        try:
+            import snowflake.connector
+            self.snowflake_connector = snowflake.connector
+        except ImportError:
+            raise ImportError("snowflake-connector-python is required for Snowflake data source")
+        
+        self._init_connection_pool()
+    
+    def _init_connection_pool(self):
+        """Initialize connection pool."""
+        try:
+            from sqlalchemy import create_engine
+            pool_size = self.config.get('connection_pool_size', 5)
+            timeout = self.config.get('connection_timeout', 30)
+            
+            conn_str = f"snowflake://{self.user}:{self.password}@{self.account}/{self.database}?warehouse={self.warehouse}&schema={self.schema}&role={self.role}"
+            
+            self.connection_pool = create_engine(
+                conn_str,
+                pool_size=pool_size,
+                pool_timeout=timeout,
+                pool_recycle=3600
+            )
+            logger.info(f"Snowflake connection pool initialized with size {pool_size}")
+        except Exception as e:
+            logger.warning(f"Failed to initialize connection pool: {str(e)}")
+    
+    def get_schema(self) -> Dict[str, Any]:
+        """Get schema from Snowflake."""
+        connection = None
+        try:
+            if self.connection_pool:
+                connection = self.connection_pool.connect()
+            else:
+                connection = self.snowflake_connector.connect(
+                    user=self.user,
+                    password=self.password,
+                    account=self.account,
+                    warehouse=self.warehouse,
+                    database=self.database,
+                    schema=self.schema,
+                    role=self.role
+                )
+            
+            cursor = connection.cursor()
+            
+            schema = {}
+            
+            # Get all tables in the schema
+            cursor.execute(f"SHOW TABLES IN SCHEMA {self.database}.{self.schema}")
+            
+            tables = cursor.fetchall()
+            
+            for table in tables:
+                table_name = table[1]
+                full_table_name = f"{self.schema}.{table_name}"
+                
+                # Get columns for each table
+                cursor.execute(f"DESCRIBE TABLE {self.database}.{self.schema}.{table_name}")
+                
+                columns = cursor.fetchall()
+                
+                schema[full_table_name] = {
+                    "schema": self.schema,
+                    "name": table_name,
+                    "columns": [
+                        {
+                            "name": col[0],
+                            "type": col[1],
+                            "nullable": col[3] == 'Y',
+                            "default": col[4],
+                            "primary_key": col[5] == 'Y',
+                            "unique_key": col[6] == 'Y'
+                        }
+                        for col in columns
+                    ]
+                }
+            
+            logger.info(f"Retrieved schema for {len(schema)} tables from Snowflake")
+            return schema
+            
+        except Exception as e:
+            logger.error(f"Error getting Snowflake schema: {sanitize_log_data(str(e))}")
+            raise
+        finally:
+            if connection:
+                connection.close()
+    
+    def get_sample_data(self, limit: int = 1000) -> pd.DataFrame:
+        """Get sample data from Snowflake."""
+        connection = None
+        try:
+            if self.connection_pool:
+                connection = self.connection_pool.connect()
+            else:
+                connection = self.snowflake_connector.connect(
+                    user=self.user,
+                    password=self.password,
+                    account=self.account,
+                    warehouse=self.warehouse,
+                    database=self.database,
+                    schema=self.schema,
+                    role=self.role
+                )
+            
+            # Get the first table with data
+            cursor = connection.cursor()
+            cursor.execute(f"SHOW TABLES IN SCHEMA {self.database}.{self.schema} LIMIT 1")
+            
+            table_result = cursor.fetchone()
+            
+            if table_result:
+                table_name = table_result[1]
+                full_table_name = f"{self.database}.{self.schema}.{table_name}"
+                
+                # Basic validation of table name
+                if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_.]*$', full_table_name):
+                    raise ValueError(f"Invalid table name: {full_table_name}")
+                
+                df = pd.read_sql(f"SELECT * FROM {full_table_name} LIMIT {limit}", connection)
+                logger.info(f"Retrieved {len(df)} sample rows from {full_table_name}")
+                return df
+            else:
+                logger.warning("No tables found in Snowflake schema")
+                return pd.DataFrame()
+                
+        except Exception as e:
+            logger.error(f"Error getting sample data from Snowflake: {sanitize_log_data(str(e))}")
+            return pd.DataFrame()
+        finally:
+            if connection:
+                connection.close()
+
+class OracleDataSource(BaseDataSource):
+    """Oracle data source implementation."""
+    
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        self.user = config.get('username')
+        self.password = config.get('password')
+        self.dsn = config.get('dsn') or f"{config.get('host')}:{config.get('port', 1521)}/{config.get('service_name')}"
+        
+        if not all([self.user, self.password, self.dsn]):
+            raise ValueError("Missing required Oracle connection parameters")
+        
+        try:
+            import cx_Oracle
+            self.cx_Oracle = cx_Oracle
+        except ImportError:
+            raise ImportError("cx_Oracle is required for Oracle data source")
+        
+        self._init_connection_pool()
+    
+    def _init_connection_pool(self):
+        """Initialize connection pool."""
+        try:
+            from sqlalchemy import create_engine
+            pool_size = self.config.get('connection_pool_size', 5)
+            timeout = self.config.get('connection_timeout', 30)
+            
+            conn_str = f"oracle+cx_oracle://{self.user}:{self.password}@{self.dsn}"
+            
+            self.connection_pool = create_engine(
+                conn_str,
+                pool_size=pool_size,
+                pool_timeout=timeout,
+                pool_recycle=3600
+            )
+            logger.info(f"Oracle connection pool initialized with size {pool_size}")
+        except Exception as e:
+            logger.warning(f"Failed to initialize connection pool: {str(e)}")
+    
+    def get_schema(self) -> Dict[str, Any]:
+        """Get schema from Oracle."""
+        connection = None
+        try:
+            if self.connection_pool:
+                connection = self.connection_pool.connect()
+            else:
+                connection = self.cx_Oracle.connect(user=self.user, password=self.password, dsn=self.dsn)
+            
+            cursor = connection.cursor()
+            
+            schema = {}
+            
+            # Get all tables owned by the user
+            cursor.execute("""
+                SELECT table_name 
+                FROM user_tables
+                ORDER BY table_name
+            """)
+            
+            tables = cursor.fetchall()
+            
+            for table in tables:
+                table_name = table[0]
+                
+                # Get columns for each table
+                cursor.execute(f"""
+                    SELECT column_name, data_type, nullable, data_default, 
+                           data_length, data_precision, data_scale
+                    FROM user_tab_columns 
+                    WHERE table_name = UPPER('{table_name}')
+                    ORDER BY column_id
+                """)
+                
+                columns = cursor.fetchall()
+                
+                schema[table_name] = {
+                    "name": table_name,
+                    "columns": [
+                        {
+                            "name": col[0],
+                            "type": col[1],
+                            "nullable": col[2] == 'Y',
+                            "default": col[3],
+                            "max_length": col[4],
+                            "precision": col[5],
+                            "scale": col[6]
+                        }
+                        for col in columns
+                    ]
+                }
+            
+            logger.info(f"Retrieved schema for {len(schema)} tables from Oracle")
+            return schema
+            
+        except Exception as e:
+            logger.error(f"Error getting Oracle schema: {sanitize_log_data(str(e))}")
+            raise
+        finally:
+            if connection:
+                connection.close()
+    
+    def get_sample_data(self, limit: int = 1000) -> pd.DataFrame:
+        """Get sample data from Oracle."""
+        connection = None
+        try:
+            if self.connection_pool:
+                connection = self.connection_pool.connect()
+            else:
+                connection = self.cx_Oracle.connect(user=self.user, password=self.password, dsn=self.dsn)
+            
+            # Get the first table with data
+            cursor = connection.cursor()
+            cursor.execute("""
+                SELECT table_name 
+                FROM user_tables
+                ORDER BY table_name
+                FETCH FIRST 1 ROWS ONLY
+            """)
+            
+            table_result = cursor.fetchone()
+            
+            if table_result:
+                table_name = table_result[0]
+                
+                # Basic validation of table name
+                if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_.]*$', table_name):
+                    raise ValueError(f"Invalid table name: {table_name}")
+                
+                df = pd.read_sql(f"SELECT * FROM {table_name} FETCH FIRST {limit} ROWS ONLY", connection)
+                logger.info(f"Retrieved {len(df)} sample rows from {table_name}")
+                return df
+            else:
+                logger.warning("No tables found in Oracle schema")
+                return pd.DataFrame()
+                
+        except Exception as e:
+            logger.error(f"Error getting sample data from Oracle: {sanitize_log_data(str(e))}")
+            return pd.DataFrame()
+        finally:
+            if connection:
+                connection.close()
+
+class MongoDBDataSource(BaseDataSource):
+    """MongoDB data source implementation."""
+    
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        self.host = config.get('host', 'localhost')
+        self.port = config.get('port', 27017)
+        self.username = config.get('username')
+        self.password = config.get('password')
+        self.database = config.get('database')
+        self.auth_source = config.get('auth_source', 'admin')
+        
+        if not self.database:
+            raise ValueError("MongoDB database name is required")
+        
+        try:
+            import pymongo
+            self.pymongo = pymongo
+        except ImportError:
+            raise ImportError("pymongo is required for MongoDB data source")
+        
+        self._init_connection_pool()
+    
+    def _init_connection_pool(self):
+        """Initialize connection pool."""
+        try:
+            pool_size = self.config.get('connection_pool_size', 5)
+            timeout = self.config.get('connection_timeout', 30)
+            
+            # Build connection URI
+            if self.username and self.password:
+                uri = f"mongodb://{self.username}:{self.password}@{self.host}:{self.port}/{self.database}?authSource={self.auth_source}"
+            else:
+                uri = f"mongodb://{self.host}:{self.port}/{self.database}"
+            
+            self.client = self.pymongo.MongoClient(
+                uri,
+                maxPoolSize=pool_size,
+                serverSelectionTimeoutMS=timeout * 1000
+            )
+            
+            # Test connection
+            self.client.admin.command('ismaster')
+            
+            logger.info(f"MongoDB connection pool initialized with size {pool_size}")
+        except Exception as e:
+            logger.warning(f"Failed to initialize connection pool: {str(e)}")
+    
+    def get_schema(self) -> Dict[str, Any]:
+        """Get schema from MongoDB."""
+        try:
+            db = self.client[self.database]
+            schema = {}
+            
+            # Get all collections in the database
+            collections = db.list_collection_names()
+            
+            for collection_name in collections:
+                collection = db[collection_name]
+                
+                # Get sample document to infer schema
+                sample_doc = collection.find_one()
+                
+                if sample_doc:
+                    # Infer schema from sample document
+                    columns = []
+                    
+                    def infer_schema(obj, prefix=""):
+                        if isinstance(obj, dict):
+                            for key, value in obj.items():
+                                full_key = f"{prefix}.{key}" if prefix else key
+                                data_type = type(value).__name__
+                                columns.append({
+                                    "name": full_key,
+                                    "type": data_type,
+                                    "nullable": True,  # MongoDB fields are nullable by default
+                                    "default": None
+                                })
+                                
+                                # Recursively infer nested objects
+                                if isinstance(value, dict):
+                                    infer_schema(value, full_key)
+                                elif isinstance(value, list) and value and isinstance(value[0], dict):
+                                    infer_schema(value[0], f"{full_key}[]")
+                    
+                    infer_schema(sample_doc)
+                    
+                    schema[collection_name] = {
+                        "name": collection_name,
+                        "columns": columns,
+                        "document_count": collection.count_documents({})
+                    }
+            
+            logger.info(f"Retrieved schema for {len(schema)} collections from MongoDB")
+            return schema
+            
+        except Exception as e:
+            logger.error(f"Error getting MongoDB schema: {str(e)}")
+            raise
+    
+    def get_sample_data(self, limit: int = 1000) -> pd.DataFrame:
+        """Get sample data from MongoDB."""
+        try:
+            db = self.client[self.database]
+            
+            # Get the first collection with data
+            collections = db.list_collection_names()
+            
+            if collections:
+                collection_name = collections[0]
+                collection = db[collection_name]
+                
+                # Get sample documents
+                cursor = collection.find().limit(limit)
+                documents = list(cursor)
+                
+                if documents:
+                    # Flatten nested documents for DataFrame
+                    df = pd.json_normalize(documents)
+                    logger.info(f"Retrieved {len(df)} sample rows from {collection_name}")
+                    return df
+                else:
+                    logger.warning(f"No documents found in collection {collection_name}")
+                    return pd.DataFrame()
+            else:
+                logger.warning("No collections found in MongoDB database")
+                return pd.DataFrame()
+                
+        except Exception as e:
+            logger.error(f"Error getting sample data from MongoDB: {str(e)}")
+            return pd.DataFrame()
+    
+    def cleanup(self) -> None:
+        """Cleanup resources."""
+        if hasattr(self, 'client'):
+            try:
+                self.client.close()
+            except Exception:
+                pass
+
+class RedshiftDataSource(BaseDataSource):
+    """Amazon Redshift data source implementation."""
+    
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        self.host = config.get('host')
+        self.port = config.get('port', 5439)
+        self.database = config.get('database')
+        self.username = config.get('username')
+        self.password = config.get('password')
+        
+        if not all([self.host, self.database, self.username, self.password]):
+            raise ValueError("Missing required Redshift connection parameters")
+        
+        self._init_connection_pool()
+    
+    def _init_connection_pool(self):
+        """Initialize connection pool."""
+        try:
+            from sqlalchemy import create_engine
+            pool_size = self.config.get('connection_pool_size', 5)
+            timeout = self.config.get('connection_timeout', 30)
+            
+            conn_str = f"postgresql+psycopg2://{self.username}:{self.password}@{self.host}:{self.port}/{self.database}"
+            
+            self.connection_pool = create_engine(
+                conn_str,
+                pool_size=pool_size,
+                pool_timeout=timeout,
+                pool_recycle=3600
+            )
+            logger.info(f"Redshift connection pool initialized with size {pool_size}")
+        except Exception as e:
+            logger.warning(f"Failed to initialize connection pool: {str(e)}")
+    
+    def get_schema(self) -> Dict[str, Any]:
+        """Get schema from Redshift."""
+        connection = None
+        try:
+            if self.connection_pool:
+                connection = self.connection_pool.connect()
+            else:
+                import psycopg2
+                connection = psycopg2.connect(
+                    host=self.host,
+                    port=self.port,
+                    database=self.database,
+                    user=self.username,
+                    password=self.password
+                )
+            
+            cursor = connection.cursor()
+            
+            schema = {}
+            
+            # Get all schemas
+            cursor.execute("""
+                SELECT nspname 
+                FROM pg_namespace 
+                WHERE nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+                ORDER BY nspname
+            """)
+            
+            schemas = cursor.fetchall()
+            
+            for schema_row in schemas:
+                schema_name = schema_row[0]
+                
+                # Get all tables in the schema
+                cursor.execute(f"""
+                    SELECT tablename 
+                    FROM pg_tables 
+                    WHERE schemaname = '{schema_name}'
+                    ORDER BY tablename
+                """)
+                
+                tables = cursor.fetchall()
+                
+                for table in tables:
+                    table_name = table[0]
+                    full_table_name = f"{schema_name}.{table_name}"
+                    
+                    # Get columns for each table
+                    cursor.execute(f"""
+                        SELECT column_name, data_type, is_nullable, column_default
+                        FROM information_schema.columns 
+                        WHERE table_schema = '{schema_name}' AND table_name = '{table_name}'
+                        ORDER BY ordinal_position
+                    """)
+                    
+                    columns = cursor.fetchall()
+                    
+                    schema[full_table_name] = {
+                        "schema": schema_name,
+                        "name": table_name,
+                        "columns": [
+                            {
+                                "name": col[0],
+                                "type": col[1],
+                                "nullable": col[2] == 'YES',
+                                "default": col[3]
+                            }
+                            for col in columns
+                        ]
+                    }
+            
+            logger.info(f"Retrieved schema for {len(schema)} tables from Redshift")
+            return schema
+            
+        except Exception as e:
+            logger.error(f"Error getting Redshift schema: {sanitize_log_data(str(e))}")
+            raise
+        finally:
+            if connection:
+                connection.close()
+    
+    def get_sample_data(self, limit: int = 1000) -> pd.DataFrame:
+        """Get sample data from Redshift."""
+        connection = None
+        try:
+            if self.connection_pool:
+                connection = self.connection_pool.connect()
+            else:
+                import psycopg2
+                connection = psycopg2.connect(
+                    host=self.host,
+                    port=self.port,
+                    database=self.database,
+                    user=self.username,
+                    password=self.password
+                )
+            
+            # Get the first table with data
+            cursor = connection.cursor()
+            cursor.execute("""
+                SELECT schemaname, tablename
+                FROM pg_tables
+                WHERE schemaname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+                ORDER BY schemaname, tablename
+                LIMIT 1
+            """)
+            
+            table_result = cursor.fetchone()
+            
+            if table_result:
+                schema_name = table_result[0]
+                table_name = table_result[1]
+                full_table_name = f"{schema_name}.{table_name}"
+                
+                # Basic validation of table name
+                if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_.]*$', full_table_name):
+                    raise ValueError(f"Invalid table name: {full_table_name}")
+                
+                df = pd.read_sql(f"SELECT * FROM {full_table_name} LIMIT {limit}", connection)
+                logger.info(f"Retrieved {len(df)} sample rows from {full_table_name}")
+                return df
+            else:
+                logger.warning("No tables found in Redshift database")
+                return pd.DataFrame()
+                
+        except Exception as e:
+            logger.error(f"Error getting sample data from Redshift: {sanitize_log_data(str(e))}")
+            return pd.DataFrame()
+        finally:
+            if connection:
+                connection.close()
+
+class AzureSynapseDataSource(BaseDataSource):
+    """Azure Synapse data source implementation."""
+    
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        self.server = config.get('server')
+        self.database = config.get('database')
+        self.username = config.get('username')
+        self.password = config.get('password')
+        
+        if not all([self.server, self.database, self.username, self.password]):
+            raise ValueError("Missing required Azure Synapse connection parameters")
+        
+        self._init_connection_pool()
+    
+    def _init_connection_pool(self):
+        """Initialize connection pool."""
+        try:
+            from sqlalchemy import create_engine
+            pool_size = self.config.get('connection_pool_size', 5)
+            timeout = self.config.get('connection_timeout', 30)
+            
+            conn_str = f"mssql+pyodbc://{self.username}:{self.password}@{self.server}/{self.database}?driver=ODBC+Driver+17+for+SQL+Server"
+            
+            self.connection_pool = create_engine(
+                conn_str,
+                pool_size=pool_size,
+                pool_timeout=timeout,
+                pool_recycle=3600
+            )
+            logger.info(f"Azure Synapse connection pool initialized with size {pool_size}")
+        except Exception as e:
+            logger.warning(f"Failed to initialize connection pool: {str(e)}")
+    
+    def get_schema(self) -> Dict[str, Any]:
+        """Get schema from Azure Synapse."""
+        connection = None
+        try:
+            if self.connection_pool:
+                connection = self.connection_pool.connect()
+            else:
+                connection = pyodbc.connect(
+                    f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={self.server};DATABASE={self.database};UID={self.username};PWD={self.password}",
+                    timeout=30
+                )
+            
+            cursor = connection.cursor()
+            
+            schema = {}
+            
+            # Get all schemas
+            cursor.execute("""
+                SELECT s.name 
+                FROM sys.schemas s
+                WHERE s.name NOT IN ('sys', 'information_schema', 'guest', 'INFORMATION_SCHEMA')
+                ORDER BY s.name
+            """)
+            
+            schemas = cursor.fetchall()
+            
+            for schema_row in schemas:
+                schema_name = schema_row[0]
+                
+                # Get all tables in the schema
+                cursor.execute(f"""
+                    SELECT t.name 
+                    FROM sys.tables t
+                    JOIN sys.schemas s ON t.schema_id = s.schema_id
+                    WHERE s.name = '{schema_name}'
+                    ORDER BY t.name
+                """)
+                
+                tables = cursor.fetchall()
+                
+                for table in tables:
+                    table_name = table[0]
+                    full_table_name = f"{schema_name}.{table_name}"
+                    
+                    # Get columns for each table
+                    cursor.execute(f"""
+                        SELECT c.name, ty.name, c.is_nullable, c.default_object_id
+                        FROM sys.columns c
+                        JOIN sys.types ty ON c.user_type_id = ty.user_type_id
+                        JOIN sys.tables t ON c.object_id = t.object_id
+                        JOIN sys.schemas s ON t.schema_id = s.schema_id
+                        WHERE s.name = '{schema_name}' AND t.name = '{table_name}'
+                        ORDER BY c.column_id
+                    """)
+                    
+                    columns = cursor.fetchall()
+                    
+                    schema[full_table_name] = {
+                        "schema": schema_name,
+                        "name": table_name,
+                        "columns": [
+                            {
+                                "name": col[0],
+                                "type": col[1],
+                                "nullable": col[2] == 1,
+                                "default": col[3]
+                            }
+                            for col in columns
+                        ]
+                    }
+            
+            logger.info(f"Retrieved schema for {len(schema)} tables from Azure Synapse")
+            return schema
+            
+        except Exception as e:
+            logger.error(f"Error getting Azure Synapse schema: {sanitize_log_data(str(e))}")
+            raise
+        finally:
+            if connection:
+                connection.close()
+    
+    def get_sample_data(self, limit: int = 1000) -> pd.DataFrame:
+        """Get sample data from Azure Synapse."""
+        connection = None
+        try:
+            if self.connection_pool:
+                connection = self.connection_pool.connect()
+            else:
+                connection = pyodbc.connect(
+                    f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={self.server};DATABASE={self.database};UID={self.username};PWD={self.password}",
+                    timeout=30
+                )
+            
+            # Get the first table with data
+            cursor = connection.cursor()
+            cursor.execute("""
+                SELECT TOP 1 s.name + '.' + t.name as full_name
+                FROM sys.tables t
+                JOIN sys.schemas s ON t.schema_id = s.schema_id
+                WHERE s.name NOT IN ('sys', 'information_schema')
+                ORDER BY s.name, t.name
+            """)
+            
+            table_result = cursor.fetchone()
+            
+            if table_result:
+                table_name = table_result[0]
+                
+                # Basic validation of table name
+                if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_.]*$', table_name):
+                    raise ValueError(f"Invalid table name: {table_name}")
+                
+                df = pd.read_sql(f"SELECT TOP {limit} * FROM {table_name}", connection)
+                logger.info(f"Retrieved {len(df)} sample rows from {table_name}")
+                return df
+            else:
+                logger.warning("No tables found in Azure Synapse database")
+                return pd.DataFrame()
+                
+        except Exception as e:
+            logger.error(f"Error getting sample data from Azure Synapse: {sanitize_log_data(str(e))}")
+            return pd.DataFrame()
+        finally:
+            if connection:
+                connection.close()
+
 # === Data Source Factory ===
 class DataSourceFactory:
     """Factory for creating data source instances."""
@@ -1544,6 +2571,16 @@ class DataSourceFactory:
             return CSVDataSource(config)
         elif source_type == 'bigquery':
             return BigQueryDataSource(config)
+        elif source_type == 'snowflake':
+            return SnowflakeDataSource(config)
+        elif source_type == 'oracle':
+            return OracleDataSource(config)
+        elif source_type == 'mongodb':
+            return MongoDBDataSource(config)
+        elif source_type == 'redshift':
+            return RedshiftDataSource(config)
+        elif source_type == 'synapse':
+            return AzureSynapseDataSource(config)
         else:
             raise NotImplementedError(f"Data source type '{source_type}' not implemented")
 
@@ -1585,6 +2622,7 @@ class FabricIntegration:
         
         return result["access_token"]
     
+    @circuit(failure_threshold=5, recovery_timeout=60)
     def deploy_report(self, report_definition: Dict[str, Any], report_name: str) -> Dict[str, Any]:
         """Deploy Power BI report to Fabric workspace."""
         try:
@@ -1663,6 +2701,568 @@ class FabricIntegration:
             logger.error(f"Error getting workspace info: {str(e)}")
             return {}
 
+# === LangGraph Workflow ===
+class ReportGenerationGraph:
+    """LangGraph-based workflow for report generation."""
+    
+    def __init__(self, llm, config: Dict[str, Any]):
+        self.llm = llm
+        self.config = config
+        self.graph = self._build_graph()
+    
+    def _build_graph(self):
+        """Build the LangGraph workflow."""
+        workflow = StateGraph()
+        
+        # Add nodes for each step in the workflow
+        workflow.add_node("schema_analysis", self._analyze_schema)
+        workflow.add_node("table_selection", self._select_tables)
+        workflow.add_node("sql_generation", self._generate_sql)
+        workflow.add_node("sql_validation", self._validate_sql)
+        workflow.add_node("python_generation", self._generate_python)
+        workflow.add_node("python_validation", self._validate_python)
+        workflow.add_node("dax_generation", self._generate_dax)
+        workflow.add_node("visualization_generation", self._generate_visualizations)
+        workflow.add_node("report_definition", self._create_report_definition)
+        workflow.add_node("fabric_deployment", self._deploy_to_fabric)
+        
+        # Define the workflow edges
+        workflow.set_entry_point("schema_analysis")
+        workflow.add_edge("schema_analysis", "table_selection")
+        workflow.add_edge("table_selection", "sql_generation")
+        workflow.add_edge("sql_generation", "sql_validation")
+        workflow.add_edge("sql_validation", "python_generation")
+        workflow.add_edge("python_generation", "python_validation")
+        workflow.add_edge("python_validation", "dax_generation")
+        workflow.add_edge("dax_generation", "visualization_generation")
+        workflow.add_edge("visualization_generation", "report_definition")
+        workflow.add_edge("report_definition", "fabric_deployment")
+        
+        # Compile the graph
+        return workflow.compile()
+    
+    @traceable
+    def _analyze_schema(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze the schema and detect drift."""
+        logger.info("Analyzing schema...")
+        
+        schema = state.get('schema')
+        data_source_name = state.get('data_source_name')
+        schema_drift_detector = state.get('schema_drift_detector')
+        
+        if schema and schema_drift_detector:
+            drift_result = schema_drift_detector.detect_schema_drift(data_source_name, schema)
+            state['schema_drift'] = drift_result
+            
+            if drift_result.get('drift_detected'):
+                logger.warning(f"Schema drift detected: {drift_result['message']}")
+        
+        return state
+    
+    @traceable
+    def _select_tables(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Select relevant tables for the report."""
+        logger.info("Selecting tables...")
+        
+        schema = state.get('schema')
+        requirements = state.get('requirements')
+        
+        if schema and requirements:
+            selected_tables = select_table_list(schema, requirements, config=self.config)
+            state['selected_tables'] = selected_tables
+            
+            if not selected_tables:
+                logger.warning("No relevant tables selected, using all tables")
+                state['selected_tables'] = list(schema.keys())[:5]
+        
+        return state
+    
+    @traceable
+    def _generate_sql(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate SQL queries."""
+        logger.info("Generating SQL queries...")
+        
+        schema = state.get('schema')
+        sample_data = state.get('sample_data')
+        requirements = state.get('requirements')
+        selected_tables = state.get('selected_tables')
+        sql_validator = state.get('sql_validator')
+        
+        if schema and requirements and selected_tables:
+            sql_prompt = ChatPromptTemplate.from_messages([
+                SystemMessage(content="You are an expert SQL developer. Generate SQL queries for a Power BI report."),
+                HumanMessage(content=f"""
+Selected Tables: {json.dumps(selected_tables)}
+Schema Information:
+{json.dumps(_summarize_schema(schema), indent=2)}
+Sample Data (first 10 rows):
+{sample_data.head(10).to_json(orient='records') if not sample_data.empty else "{}"}
+Report Requirements:
+{requirements}
+Generate appropriate SQL queries that:
+1. Only use SELECT statements (no DML operations)
+2. Focus on the selected tables
+3. Address the report requirements
+4. Are optimized for Power BI consumption
+5. Include proper JOINs where relationships exist
+Return a JSON object with this exact format:
+{{"queries": ["SELECT query1", "SELECT query2"]}}
+Ensure all queries start with SELECT or WITH statements only.
+""")
+            ])
+            
+            # Create chain
+            sql_chain = LLMChain(llm=self.llm, prompt=sql_prompt, verbose=False)
+            
+            # Generate queries with retry logic
+            for attempt in range(1, self.config.get('max_sql_generation_try', 3) + 1):
+                try:
+                    result = sql_chain.run({})
+                    
+                    # Parse result
+                    sql_data = json.loads(result)
+                    sql_queries = sql_data.get("queries", [])
+                    
+                    # Validate queries
+                    if sql_validator:
+                        validation_result = sql_validator.validate_sql_queries(sql_queries)
+                        if not validation_result["is_valid"]:
+                            raise ValueError(f"SQL validation failed: {validation_result['error']}")
+                    
+                    state['sql_queries'] = sql_queries
+                    logger.info(f"Generated {len(sql_queries)} valid SQL queries")
+                    break
+                    
+                except Exception as e:
+                    decision = make_sql_decision(e, attempt, self.config.get('max_sql_generation_try', 3))
+                    logger.warning(f"SQL generation attempt {attempt} failed: {str(e)}")
+                    
+                    if decision['decision'] == 'abort':
+                        state['sql_error'] = str(e)
+                        break
+        
+        return state
+    
+    @traceable
+    def _validate_sql(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate SQL queries."""
+        logger.info("Validating SQL queries...")
+        
+        sql_queries = state.get('sql_queries')
+        sql_validator = state.get('sql_validator')
+        
+        if sql_queries and sql_validator:
+            validation_result = sql_validator.validate_sql_queries(sql_queries)
+            state['sql_validation'] = validation_result
+            
+            if not validation_result["is_valid"]:
+                logger.error(f"SQL validation failed: {validation_result['error']}")
+        
+        return state
+    
+    @traceable
+    def _generate_python(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate Python script."""
+        logger.info("Generating Python script...")
+        
+        sql_queries = state.get('sql_queries')
+        sample_data = state.get('sample_data')
+        requirements = state.get('requirements')
+        script_sanitizer = state.get('script_sanitizer')
+        
+        if sql_queries and requirements:
+            python_prompt = ChatPromptTemplate.from_messages([
+                SystemMessage(content="You are an expert Python developer specializing in data transformation for Power BI."),
+                HumanMessage(content=f"""
+SQL Queries:
+{json.dumps(sql_queries)}
+Sample Data:
+{sample_data.head(10).to_json(orient='records') if not sample_data.empty else "{}"}
+Report Requirements:
+{requirements}
+Generate a Python script that:
+1. Uses pandas for data manipulation
+2. Includes proper data transformations
+3. Creates calculated columns where needed
+4. Handles data quality issues
+5. Prepares data optimally for Power BI
+6. Uses only safe, allowed libraries (pandas, numpy, matplotlib, plotly)
+7. Does not include any network calls or file system access outside sandbox
+Return a JSON object with this exact format:
+{{"script": "python_code_here"}}
+The script should be production-ready and follow best practices.
+""")
+            ])
+            
+            # Create chain
+            python_chain = LLMChain(llm=self.llm, prompt=python_prompt, verbose=False)
+            
+            # Generate script with retry logic
+            for attempt in range(1, self.config.get('max_python_script_check', 3) + 1):
+                try:
+                    result = python_chain.run({})
+                    
+                    # Parse result
+                    script_data = json.loads(result)
+                    python_script = script_data.get("script", "")
+                    
+                    # Validate script security
+                    if script_sanitizer:
+                        sanitization_result = script_sanitizer.sanitize_python_script(python_script)
+                        if not sanitization_result.get("is_safe", False):
+                            raise ValueError(f"Script security validation failed: {sanitization_result.get('error')}")
+                    
+                    state['python_script'] = python_script
+                    logger.info("Generated secure Python script successfully")
+                    break
+                    
+                except Exception as e:
+                    decision = make_python_decision(e, attempt, self.config.get('max_python_script_check', 3))
+                    logger.warning(f"Python script generation attempt {attempt} failed: {str(e)}")
+                    
+                    if decision['decision'] == 'abort':
+                        state['python_error'] = str(e)
+                        break
+        
+        return state
+    
+    @traceable
+    def _validate_python(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate Python script."""
+        logger.info("Validating Python script...")
+        
+        python_script = state.get('python_script')
+        script_sanitizer = state.get('script_sanitizer')
+        
+        if python_script and script_sanitizer:
+            sanitization_result = script_sanitizer.sanitize_python_script(python_script)
+            state['python_validation'] = sanitization_result
+            
+            if not sanitization_result.get("is_safe", False):
+                logger.error(f"Python script validation failed: {sanitization_result.get('error')}")
+        
+        return state
+    
+    @traceable
+    def _generate_dax(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate DAX measures."""
+        logger.info("Generating DAX measures...")
+        
+        schema = state.get('schema')
+        sample_data = state.get('sample_data')
+        requirements = state.get('requirements')
+        selected_tables = state.get('selected_tables')
+        
+        if schema and requirements and selected_tables:
+            dax_prompt = ChatPromptTemplate.from_messages([
+                SystemMessage(content="You are a DAX expert for Power BI. Generate DAX measures for a Power BI report."),
+                HumanMessage(content=f"""
+Selected Tables: {json.dumps(selected_tables)}
+Schema Information:
+{json.dumps(_summarize_schema(schema), indent=2)}
+Sample Data (first 10 rows):
+{sample_data.head(10).to_json(orient='records') if not sample_data.empty else "{}"}
+Report Requirements:
+{requirements}
+Generate DAX measures that:
+1. Address the report requirements
+2. Follow DAX best practices
+3. Include proper error handling
+4. Are optimized for performance
+5. Include comments explaining their purpose
+Return a JSON object with this exact format:
+{{
+    "measures": [
+        {{
+            "name": "MeasureName",
+            "table": "TableName",
+            "expression": "DAX expression here",
+            "description": "Description of what the measure does"
+        }}
+    ]
+}}
+""")
+            ])
+            
+            # Create chain
+            dax_chain = LLMChain(llm=self.llm, prompt=dax_prompt, verbose=False)
+            
+            try:
+                result = dax_chain.run({})
+                
+                # Parse result
+                dax_data = json.loads(result)
+                dax_measures = dax_data.get("measures", [])
+                
+                state['dax_measures'] = dax_measures
+                logger.info(f"Generated {len(dax_measures)} DAX measures")
+                
+            except Exception as e:
+                logger.error(f"Error generating DAX measures: {str(e)}")
+                state['dax_error'] = str(e)
+        
+        return state
+    
+    @traceable
+    def _generate_visualizations(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate visualization specifications."""
+        logger.info("Generating visualizations...")
+        
+        schema = state.get('schema')
+        sample_data = state.get('sample_data')
+        requirements = state.get('requirements')
+        selected_tables = state.get('selected_tables')
+        visualization_config = self.config.get('visualization', {})
+        
+        if schema and requirements and selected_tables:
+            viz_prompt = ChatPromptTemplate.from_messages([
+                SystemMessage(content="You are a Power BI visualization expert. Generate visualization specifications for a Power BI report."),
+                HumanMessage(content=f"""
+Selected Tables: {json.dumps(selected_tables)}
+Schema Information:
+{json.dumps(_summarize_schema(schema), indent=2)}
+Sample Data (first 10 rows):
+{sample_data.head(10).to_json(orient='records') if not sample_data.empty else "{}"}
+Report Requirements:
+{requirements}
+Visualization Configuration:
+{json.dumps(visualization_config)}
+Generate visualization specifications that:
+1. Address the report requirements
+2. Follow Power BI visualization best practices
+3. Include appropriate chart types for the data
+4. Specify data bindings and formatting
+5. Include titles and labels
+Return a JSON object with this exact format:
+{{
+    "visualizations": [
+        {{
+            "type": "chart_type",
+            "title": "Visualization Title",
+            "dataFields": [
+                {{
+                    "name": "Field Name",
+                    "source": "Table.Field"
+                }}
+            ],
+            "categoryField": "Table.CategoryField",
+            "formatting": {{
+                "colors": ["#01B8AA", "#374649"],
+                "showLabels": true
+            }}
+        }}
+    ]
+}}
+Supported chart types: column, bar, line, pie, donut, scatter, map, card, table, matrix
+""")
+            ])
+            
+            # Create chain
+            viz_chain = LLMChain(llm=self.llm, prompt=viz_prompt, verbose=False)
+            
+            try:
+                result = viz_chain.run({})
+                
+                # Parse result
+                viz_data = json.loads(result)
+                visualizations = viz_data.get("visualizations", [])
+                
+                state['visualizations'] = visualizations
+                logger.info(f"Generated {len(visualizations)} visualizations")
+                
+            except Exception as e:
+                logger.error(f"Error generating visualizations: {str(e)}")
+                state['visualization_error'] = str(e)
+        
+        return state
+    
+    @traceable
+    def _create_report_definition(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Create comprehensive report definition."""
+        logger.info("Creating report definition...")
+        
+        selected_tables = state.get('selected_tables')
+        sql_queries = state.get('sql_queries')
+        python_script = state.get('python_script')
+        dax_measures = state.get('dax_measures')
+        visualizations = state.get('visualizations')
+        sample_data = state.get('sample_data')
+        requirements = state.get('requirements')
+        template_handler = state.get('template_handler')
+        
+        if selected_tables and sql_queries and python_script:
+            definition_prompt = ChatPromptTemplate.from_messages([
+                SystemMessage(content="You are a Power BI expert. Create a comprehensive report definition."),
+                HumanMessage(content=f"""
+Selected Tables: {json.dumps(selected_tables)}
+SQL Queries: {json.dumps(sql_queries)}
+Python Script: {python_script}
+DAX Measures: {json.dumps(dax_measures)}
+Visualizations: {json.dumps(visualizations)}
+Sample Data: {sample_data.head(10).to_json(orient='records') if not sample_data.empty else "{}"}
+Requirements: {requirements}
+Generate a complete Power BI report definition including:
+1. Data model with relationships
+2. Report pages and layout
+3. Visual placement and formatting
+4. Filters and slicers
+5. Drill-through configurations
+6. Bookmarks and navigation
+Return a detailed JSON object with the report specification.
+""")
+            ])
+            
+            # Create chain
+            definition_chain = LLMChain(llm=self.llm, prompt=definition_prompt, verbose=False)
+            
+            try:
+                result = definition_chain.run({})
+                
+                # Try to parse as JSON, fallback to text
+                try:
+                    report_definition = json.loads(result)
+                except json.JSONDecodeError:
+                    report_definition = {"definition": result, "format": "text"}
+                
+                # Add generated components
+                report_definition.update({
+                    "sql_queries": sql_queries,
+                    "python_script": python_script,
+                    "dax_measures": dax_measures,
+                    "visualizations": visualizations,
+                    "selected_tables": selected_tables,
+                    "generated_at": datetime.now().isoformat()
+                })
+                
+                # Use template handler to enhance the report definition
+                if template_handler:
+                    report_definition = template_handler.enhance_report_definition(report_definition)
+                
+                state['report_definition'] = report_definition
+                logger.info("Created comprehensive report definition")
+                
+            except Exception as e:
+                logger.error(f"Error creating report definition: {str(e)}")
+                state['report_definition_error'] = str(e)
+        
+        return state
+    
+    @traceable
+    def _deploy_to_fabric(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Deploy report to Fabric."""
+        logger.info("Deploying to Fabric...")
+        
+        report_definition = state.get('report_definition')
+        data_source_name = state.get('data_source_name')
+        fabric_integration = state.get('fabric_integration')
+        
+        if report_definition and fabric_integration and self.config.get('enable_fabric_deployment', True):
+            try:
+                fabric_deployment = fabric_integration.deploy_report(
+                    report_definition, 
+                    f"Generated Report - {data_source_name}"
+                )
+                state['fabric_deployment'] = fabric_deployment
+                
+                if fabric_deployment.get('status') == 'success':
+                    logger.info(f"Successfully deployed report to Fabric with ID: {fabric_deployment.get('report_id')}")
+                else:
+                    logger.error(f"Failed to deploy report to Fabric: {fabric_deployment.get('error')}")
+                    
+            except Exception as e:
+                logger.error(f"Error deploying to Fabric: {str(e)}")
+                state['fabric_deployment_error'] = str(e)
+        
+        return state
+    
+    def run(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Run the report generation workflow."""
+        return self.graph.invoke(state)
+
+# === Power BI Template Handler ===
+class PowerBITemplate:
+    """Handle Power BI template creation and manipulation."""
+    
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self.theme = config.get('theme', 'standard')
+        self.color_palette = config.get('color_palette', ["#01B8AA", "#374649", "#FD625E", "#F2C80F", "#4BC0C0"])
+        self.font_family = config.get('font_family', 'Segoe UI')
+        self.default_visualization_types = config.get('default_visualization_types', ["column", "line", "pie", "card", "table"])
+        self.enable_custom_visuals = config.get('enable_custom_visuals', True)
+    
+    def enhance_report_definition(self, report_definition: Dict[str, Any]) -> Dict[str, Any]:
+        """Enhance report definition with template styling and formatting."""
+        # Apply theme and styling
+        if "theme" not in report_definition:
+            report_definition["theme"] = {
+                "name": self.theme,
+                "colorPalette": self.color_palette,
+                "fontFamily": self.font_family
+            }
+        
+        # Apply default formatting to visualizations
+        if "visualizations" in report_definition:
+            for viz in report_definition["visualizations"]:
+                if "formatting" not in viz:
+                    viz["formatting"] = {
+                        "colors": self.color_palette,
+                        "fontFamily": self.font_family
+                    }
+        
+        # Add custom visuals if enabled
+        if self.enable_custom_visuals and "customVisuals" not in report_definition:
+            report_definition["customVisuals"] = [
+                {
+                    "name": "DrilldownChart",
+                    "version": "1.0.0",
+                    "url": "https://visuals.powerbi.com/custom"
+                }
+            ]
+        
+        return report_definition
+    
+    def create_pbix_file(self, report_definition: Dict[str, Any], report_id: str) -> str:
+        """Create a PBIX file from the report definition."""
+        # In a real implementation, this would:
+        # 1. Create a PBIX file structure
+        # 2. Add data model
+        # 3. Add report pages and visuals
+        # 4. Add DAX measures
+        # 5. Save the PBIX file
+        
+        # For now, create a placeholder
+        pbix_path = f"reports/{report_id}.pbix"
+        
+        try:
+            # Create a minimal PBIX file structure
+            with zipfile.ZipFile(pbix_path, 'w') as pbix:
+                # Add report layout
+                pbix.writestr("Report/Layout", json.dumps(report_definition.get("layout", {})))
+                
+                # Add data model
+                pbix.writestr("DataModel", json.dumps(report_definition.get("dataModel", {})))
+                
+                # Add metadata
+                pbix.writestr("Metadata", json.dumps({
+                    "created": datetime.now().isoformat(),
+                    "version": "1.0",
+                    "generator": "PowerBI Report Generator"
+                }))
+                
+                # Add theme
+                pbix.writestr("Report/Theme", json.dumps(report_definition.get("theme", {})))
+                
+                # Add visualizations
+                pbix.writestr("Report/Visualizations", json.dumps(report_definition.get("visualizations", [])))
+            
+            logger.info(f"Created PBIX file: {pbix_path}")
+            return pbix_path
+            
+        except Exception as e:
+            logger.error(f"Error creating PBIX file: {str(e)}")
+            raise
+
 # === Power BI Report Generator ===
 class PowerBIReportGenerator:
     """Main class for generating Power BI reports using LangChain."""
@@ -1697,6 +3297,18 @@ class PowerBIReportGenerator:
                 max_tokens=openai_config.get('max_tokens', 2000)
             )
         
+        # Initialize LangSmith if enabled
+        self.langsmith_client = None
+        if config.get('enable_langsmith', True) and openai_config.get('langsmith_project'):
+            try:
+                self.langsmith_client = Client(
+                    api_key=os.getenv("LANGCHAIN_API_KEY"),
+                    project_name=openai_config.get('langsmith_project')
+                )
+                logger.info("LangSmith client initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize LangSmith client: {str(e)}")
+        
         # Initialize Fabric integration if enabled
         self.fabric_integration = None
         if config.get('enable_fabric_deployment', True):
@@ -1708,8 +3320,14 @@ class PowerBIReportGenerator:
         # Initialize Power BI template handler
         self.template_handler = PowerBITemplate(config.get('visualization', {}))
         
+        # Initialize LangGraph workflow
+        self.workflow = ReportGenerationGraph(self.llm, config)
+        
         # Initialize memory for conversation context
         self.memory = ConversationBufferMemory()
+        
+        # Initialize AutoScaler if enabled
+        self.autoscaler = AutoScaler(config)
         
         logger.info("PowerBI Report Generator initialized successfully")
     
@@ -1741,10 +3359,6 @@ class PowerBIReportGenerator:
                 if not schema:
                     raise ValueError(f"No schema available for data source '{data_source_name}'")
                 
-                drift_result = self.schema_drift_detector.detect_schema_drift(data_source_name, schema)
-                if drift_result.get('drift_detected'):
-                    logger.warning(f"Schema drift detected for {data_source_name}: {drift_result['message']}")
-                
                 # Get sample data for analysis
                 sample_data = data_source.get_sample_data(self.config.get('data_chunk_size', 1000))
                 if sample_data.empty:
@@ -1760,39 +3374,35 @@ class PowerBIReportGenerator:
                     if critical_issues:
                         logger.warning(f"Critical data quality issues found in {data_source_name}: {len(critical_issues)} issues")
                 
-                # Select relevant tables
-                selected_tables = select_table_list(schema, report_requirements, config=self.config)
-                if not selected_tables:
-                    logger.warning("No relevant tables selected for report generation")
-                    selected_tables = list(schema.keys())[:5]  # Fallback to first 5 tables
+                # Initialize state for LangGraph workflow
+                state = {
+                    "data_source_name": data_source_name,
+                    "requirements": report_requirements,
+                    "schema": schema,
+                    "sample_data": sample_data,
+                    "data_profile": data_profile,
+                    "schema_drift_detector": self.schema_drift_detector,
+                    "sql_validator": self.sql_validator,
+                    "script_sanitizer": self.script_sanitizer,
+                    "template_handler": self.template_handler,
+                    "fabric_integration": self.fabric_integration,
+                    "config": self.config
+                }
                 
-                # Generate SQL queries
-                sql_queries = self._generate_sql_queries(schema, sample_data, report_requirements, selected_tables)
+                # Run the LangGraph workflow
+                if self.autoscaler.enabled:
+                    result_state = self.autoscaler.submit_task(self.workflow.run, state)
+                else:
+                    result_state = self.workflow.run(state)
                 
-                # Generate Python script
-                python_script = self._generate_python_script(sql_queries, sample_data, report_requirements)
-                
-                # Generate DAX measures
-                dax_measures = self._generate_dax_measures(schema, sample_data, report_requirements, selected_tables)
-                
-                # Generate visualizations
-                visualizations = self._generate_visualizations(schema, sample_data, report_requirements, selected_tables)
-                
-                # Generate report definition
-                report_definition = self._generate_report_definition(
-                    selected_tables, sql_queries, python_script, dax_measures, 
-                    visualizations, sample_data, report_requirements
-                )
+                # Extract results from state
+                report_id = f"report_{int(time.time())}_{secrets.token_hex(4)}"
                 
                 # Create Power BI report
-                report_id = self._create_powerbi_report(report_definition, report_requirements)
-                
-                # Deploy to Fabric if enabled
-                fabric_deployment = None
-                if self.fabric_integration and self.config.get('enable_fabric_deployment', True):
-                    fabric_deployment = self.fabric_integration.deploy_report(
-                        report_definition, 
-                        f"Generated Report - {data_source_name}"
+                if 'report_definition' in result_state:
+                    pbix_path = self.template_handler.create_pbix_file(
+                        result_state['report_definition'], 
+                        report_id
                     )
                 
                 # Record metrics
@@ -1803,20 +3413,20 @@ class PowerBIReportGenerator:
                     "report_id": report_id,
                     "data_source": data_source_name,
                     "execution_time": round(time.time() - start_time, 2),
-                    "report_definition": report_definition,
-                    "selected_tables": selected_tables,
-                    "sql_queries": sql_queries,
-                    "dax_measures": dax_measures,
-                    "visualizations": visualizations,
+                    "report_definition": result_state.get('report_definition'),
+                    "selected_tables": result_state.get('selected_tables'),
+                    "sql_queries": result_state.get('sql_queries'),
+                    "dax_measures": result_state.get('dax_measures'),
+                    "visualizations": result_state.get('visualizations'),
                     "data_profile": data_profile,
-                    "schema_drift": drift_result,
-                    "fabric_deployment": fabric_deployment,
+                    "schema_drift": result_state.get('schema_drift'),
+                    "fabric_deployment": result_state.get('fabric_deployment'),
                     "metadata": {
                         "generated_at": datetime.now().isoformat(),
-                        "table_count": len(selected_tables),
-                        "query_count": len(sql_queries),
-                        "measure_count": len(dax_measures) if dax_measures else 0,
-                        "visualization_count": len(visualizations) if visualizations else 0,
+                        "table_count": len(result_state.get('selected_tables', [])),
+                        "query_count": len(result_state.get('sql_queries', [])),
+                        "measure_count": len(result_state.get('dax_measures', [])),
+                        "visualization_count": len(result_state.get('visualizations', [])),
                         "sample_row_count": len(sample_data) if not sample_data.empty else 0
                     }
                 }
@@ -1834,384 +3444,413 @@ class PowerBIReportGenerator:
             # Cleanup data source connection
             if 'data_source' in locals():
                 data_source.cleanup()
-    
-    def _generate_sql_queries(self, schema: Dict[str, Any], sample_data: pd.DataFrame, 
-                            requirements: str, selected_tables: List[str]) -> List[str]:
-        """Generate SQL queries using LangChain."""
-        
-        sql_prompt = ChatPromptTemplate.from_messages([
-            SystemMessage(content="You are an expert SQL developer. Generate SQL queries for a Power BI report."),
-            HumanMessage(content=f"""
-Selected Tables: {json.dumps(selected_tables)}
-Schema Information:
-{json.dumps(_summarize_schema(schema), indent=2)}
-Sample Data (first 10 rows):
-{sample_data.head(10).to_json(orient='records') if not sample_data.empty else "{}"}
-Report Requirements:
-{requirements}
-Generate appropriate SQL queries that:
-1. Only use SELECT statements (no DML operations)
-2. Focus on the selected tables
-3. Address the report requirements
-4. Are optimized for Power BI consumption
-5. Include proper JOINs where relationships exist
-Return a JSON object with this exact format:
-{{"queries": ["SELECT query1", "SELECT query2"]}}
-Ensure all queries start with SELECT or WITH statements only.
-""")
-        ])
-        
-        # Create chain
-        sql_chain = LLMChain(llm=self.llm, prompt=sql_prompt, verbose=False)
-        
-        # Generate queries with retry logic
-        for attempt in range(1, self.config.get('max_sql_generation_try', 3) + 1):
-            try:
-                result = sql_chain.run({})
-                
-                # Parse result
-                sql_data = json.loads(result)
-                sql_queries = sql_data.get("queries", [])
-                
-                # Validate queries
-                validation_result = self.sql_validator.validate_sql_queries(sql_queries)
-                if not validation_result["is_valid"]:
-                    raise ValueError(f"SQL validation failed: {validation_result['error']}")
-                
-                logger.info(f"Generated {len(sql_queries)} valid SQL queries")
-                return sql_queries
-                
-            except Exception as e:
-                decision = make_sql_decision(e, attempt, self.config.get('max_sql_generation_try', 3))
-                logger.warning(f"SQL generation attempt {attempt} failed: {str(e)}")
-                
-                if decision['decision'] == 'abort':
-                    raise Exception(f"SQL generation failed after {attempt} attempts: {decision['error']}")
-        
-        return []
-    
-    def _generate_python_script(self, sql_queries: List[str], sample_data: pd.DataFrame, 
-                               requirements: str) -> str:
-        """Generate Python script using LangChain."""
-        
-        python_prompt = ChatPromptTemplate.from_messages([
-            SystemMessage(content="You are an expert Python developer specializing in data transformation for Power BI."),
-            HumanMessage(content=f"""
-SQL Queries:
-{json.dumps(sql_queries)}
-Sample Data:
-{sample_data.head(10).to_json(orient='records') if not sample_data.empty else "{}"}
-Report Requirements:
-{requirements}
-Generate a Python script that:
-1. Uses pandas for data manipulation
-2. Includes proper data transformations
-3. Creates calculated columns where needed
-4. Handles data quality issues
-5. Prepares data optimally for Power BI
-6. Uses only safe, allowed libraries (pandas, numpy, matplotlib, plotly)
-7. Does not include any network calls or file system access outside sandbox
-Return a JSON object with this exact format:
-{{"script": "python_code_here"}}
-The script should be production-ready and follow best practices.
-""")
-        ])
-        
-        # Create chain
-        python_chain = LLMChain(llm=self.llm, prompt=python_prompt, verbose=False)
-        
-        # Generate script with retry logic
-        for attempt in range(1, self.config.get('max_python_script_check', 3) + 1):
-            try:
-                result = python_chain.run({})
-                
-                # Parse result
-                script_data = json.loads(result)
-                python_script = script_data.get("script", "")
-                
-                # Validate script security
-                sanitization_result = self.script_sanitizer.sanitize_python_script(python_script)
-                if not sanitization_result.get("is_safe", False):
-                    raise ValueError(f"Script security validation failed: {sanitization_result.get('error')}")
-                
-                logger.info("Generated secure Python script successfully")
-                return python_script
-                
-            except Exception as e:
-                decision = make_python_decision(e, attempt, self.config.get('max_python_script_check', 3))
-                logger.warning(f"Python script generation attempt {attempt} failed: {str(e)}")
-                
-                if decision['decision'] == 'abort':
-                    raise Exception(f"Python script generation failed after {attempt} attempts: {decision['error']}")
-        
-        return ""
-    
-    def _generate_dax_measures(self, schema: Dict[str, Any], sample_data: pd.DataFrame, 
-                              requirements: str, selected_tables: List[str]) -> List[Dict[str, Any]]:
-        """Generate DAX measures using LangChain."""
-        
-        dax_prompt = ChatPromptTemplate.from_messages([
-            SystemMessage(content="You are a DAX expert for Power BI. Generate DAX measures for a Power BI report."),
-            HumanMessage(content=f"""
-Selected Tables: {json.dumps(selected_tables)}
-Schema Information:
-{json.dumps(_summarize_schema(schema), indent=2)}
-Sample Data (first 10 rows):
-{sample_data.head(10).to_json(orient='records') if not sample_data.empty else "{}"}
-Report Requirements:
-{requirements}
-Generate DAX measures that:
-1. Address the report requirements
-2. Follow DAX best practices
-3. Include proper error handling
-4. Are optimized for performance
-5. Include comments explaining their purpose
-Return a JSON object with this exact format:
-{{
-    "measures": [
-        {{
-            "name": "MeasureName",
-            "table": "TableName",
-            "expression": "DAX expression here",
-            "description": "Description of what the measure does"
-        }}
-    ]
-}}
-""")
-        ])
-        
-        # Create chain
-        dax_chain = LLMChain(llm=self.llm, prompt=dax_prompt, verbose=False)
-        
-        try:
-            result = dax_chain.run({})
-            
-            # Parse result
-            dax_data = json.loads(result)
-            dax_measures = dax_data.get("measures", [])
-            
-            logger.info(f"Generated {len(dax_measures)} DAX measures")
-            return dax_measures
-            
-        except Exception as e:
-            logger.error(f"Error generating DAX measures: {str(e)}")
-            return []
-    
-    def _generate_visualizations(self, schema: Dict[str, Any], sample_data: pd.DataFrame, 
-                                requirements: str, selected_tables: List[str]) -> List[Dict[str, Any]]:
-        """Generate visualization specifications using LangChain."""
-        
-        viz_prompt = ChatPromptTemplate.from_messages([
-            SystemMessage(content="You are a Power BI visualization expert. Generate visualization specifications for a Power BI report."),
-            HumanMessage(content=f"""
-Selected Tables: {json.dumps(selected_tables)}
-Schema Information:
-{json.dumps(_summarize_schema(schema), indent=2)}
-Sample Data (first 10 rows):
-{sample_data.head(10).to_json(orient='records') if not sample_data.empty else "{}"}
-Report Requirements:
-{requirements}
-Generate visualization specifications that:
-1. Address the report requirements
-2. Follow Power BI visualization best practices
-3. Include appropriate chart types for the data
-4. Specify data bindings and formatting
-5. Include titles and labels
-Return a JSON object with this exact format:
-{{
-    "visualizations": [
-        {{
-            "type": "chart_type",
-            "title": "Visualization Title",
-            "dataFields": [
-                {{
-                    "name": "Field Name",
-                    "source": "Table.Field"
-                }}
-            ],
-            "categoryField": "Table.CategoryField",
-            "formatting": {{
-                "colors": ["#01B8AA", "#374649"],
-                "showLabels": true
-            }}
-        }}
-    ]
-}}
-Supported chart types: column, bar, line, pie, donut, scatter, map, card, table, matrix
-""")
-        ])
-        
-        # Create chain
-        viz_chain = LLMChain(llm=self.llm, prompt=viz_prompt, verbose=False)
-        
-        try:
-            result = viz_chain.run({})
-            
-            # Parse result
-            viz_data = json.loads(result)
-            visualizations = viz_data.get("visualizations", [])
-            
-            logger.info(f"Generated {len(visualizations)} visualizations")
-            return visualizations
-            
-        except Exception as e:
-            logger.error(f"Error generating visualizations: {str(e)}")
-            return []
-    
-    def _generate_report_definition(self, selected_tables: List[str], sql_queries: List[str], 
-                                  python_script: str, dax_measures: List[Dict[str, Any]],
-                                  visualizations: List[Dict[str, Any]], sample_data: pd.DataFrame, 
-                                  requirements: str) -> Dict[str, Any]:
-        """Generate comprehensive report definition."""
-        
-        definition_prompt = ChatPromptTemplate.from_messages([
-            SystemMessage(content="You are a Power BI expert. Create a comprehensive report definition."),
-            HumanMessage(content=f"""
-Selected Tables: {json.dumps(selected_tables)}
-SQL Queries: {json.dumps(sql_queries)}
-Python Script: {python_script}
-DAX Measures: {json.dumps(dax_measures)}
-Visualizations: {json.dumps(visualizations)}
-Sample Data: {sample_data.head(10).to_json(orient='records') if not sample_data.empty else "{}"}
-Requirements: {requirements}
-Generate a complete Power BI report definition including:
-1. Data model with relationships
-2. Report pages and layout
-3. Visual placement and formatting
-4. Filters and slicers
-5. Drill-through configurations
-6. Bookmarks and navigation
-Return a detailed JSON object with the report specification.
-""")
-        ])
-        
-        # Create chain
-        definition_chain = LLMChain(llm=self.llm, prompt=definition_prompt, verbose=False)
-        
-        try:
-            result = definition_chain.run({})
-            
-            # Try to parse as JSON, fallback to text
-            try:
-                report_definition = json.loads(result)
-            except json.JSONDecodeError:
-                report_definition = {"definition": result, "format": "text"}
-            
-            # Add generated components
-            report_definition.update({
-                "sql_queries": sql_queries,
-                "python_script": python_script,
-                "dax_measures": dax_measures,
-                "visualizations": visualizations,
-                "selected_tables": selected_tables,
-                "generated_at": datetime.now().isoformat()
-            })
-            
-            # Use template handler to enhance the report definition
-            report_definition = self.template_handler.enhance_report_definition(report_definition)
-            
-            return report_definition
-            
-        except Exception as e:
-            logger.error(f"Error generating report definition: {str(e)}")
-            # Return minimal definition
-            return {
-                "sql_queries": sql_queries,
-                "python_script": python_script,
-                "dax_measures": dax_measures,
-                "visualizations": visualizations,
-                "selected_tables": selected_tables,
-                "error": str(e),
-                "generated_at": datetime.now().isoformat()
-            }
-    
-    def _create_powerbi_report(self, report_definition: Dict[str, Any], report_requirements: str) -> str:
-        """Create Power BI report file."""
-        # Generate a unique report ID
-        report_id = f"report_{int(time.time())}_{secrets.token_hex(4)}"
-        
-        try:
-            # Create PBIX file using template handler
-            pbix_path = self.template_handler.create_pbix_file(report_definition, report_id)
-            
-            # Save report definition to file for debugging
-            os.makedirs("reports", exist_ok=True)
-            with open(f"reports/{report_id}.json", 'w') as f:
-                json.dump(report_definition, f, indent=2, default=str)
-            
-            logger.info(f"Created Power BI report with ID: {report_id}")
-            return report_id
-            
-        except Exception as e:
-            logger.error(f"Error creating Power BI report: {str(e)}")
-            raise
 
-# === Power BI Template Handler (Stub) ===
-class PowerBITemplate:
-    """Handle Power BI template creation and manipulation."""
+# === Airflow Integration ===
+def create_airflow_dag(report_generator: PowerBIReportGenerator, data_source_name: str, report_requirements: str) -> Optional[DAG]:
+    """Create an Airflow DAG for report generation."""
+    if not AIRFLOW_AVAILABLE:
+        logger.warning("Airflow is not available. DAG creation skipped.")
+        return None
     
-    def __init__(self, config: Dict[str, Any]):
-        self.config = config
-        self.theme = config.get('theme', 'standard')
-        self.color_palette = config.get('color_palette', ["#01B8AA", "#374649", "#FD625E", "#F2C80F", "#4BC0C0"])
-        self.font_family = config.get('font_family', 'Segoe UI')
-        self.default_visualization_types = config.get('default_visualization_types', ["column", "line", "pie", "card", "table"])
-    
-    def enhance_report_definition(self, report_definition: Dict[str, Any]) -> Dict[str, Any]:
-        """Enhance report definition with template styling and formatting."""
-        # Apply theme and styling
-        if "theme" not in report_definition:
-            report_definition["theme"] = {
-                "name": self.theme,
-                "colorPalette": self.color_palette,
-                "fontFamily": self.font_family
-            }
-        
-        # Apply default formatting to visualizations
-        if "visualizations" in report_definition:
-            for viz in report_definition["visualizations"]:
-                if "formatting" not in viz:
-                    viz["formatting"] = {
-                        "colors": self.color_palette,
-                        "fontFamily": self.font_family
-                    }
-        
-        return report_definition
-    
-    def create_pbix_file(self, report_definition: Dict[str, Any], report_id: str) -> str:
-        """Create a PBIX file from the report definition."""
-        # In a real implementation, this would:
-        # 1. Create a PBIX file structure
-        # 2. Add data model
-        # 3. Add report pages and visuals
-        # 4. Add DAX measures
-        # 5. Save the PBIX file
-        
-        # For now, create a placeholder
-        pbix_path = f"reports/{report_id}.pbix"
-        
+    def generate_report_task(**kwargs):
+        """Task to generate a Power BI report."""
         try:
-            # Create a minimal PBIX file structure
-            with zipfile.ZipFile(pbix_path, 'w') as pbix:
-                # Add report layout
-                pbix.writestr("Report/Layout", json.dumps(report_definition.get("layout", {})))
-                
-                # Add data model
-                pbix.writestr("DataModel", json.dumps(report_definition.get("dataModel", {})))
-                
-                # Add metadata
-                pbix.writestr("Metadata", json.dumps({
-                    "created": datetime.now().isoformat(),
-                    "version": "1.0",
-                    "generator": "PowerBI Report Generator"
-                }))
-            
-            logger.info(f"Created PBIX file: {pbix_path}")
-            return pbix_path
-            
+            result = report_generator.generate_report(data_source_name, report_requirements)
+            logger.info(f"Report generated successfully: {result['report_id']}")
+            return result
         except Exception as e:
-            logger.error(f"Error creating PBIX file: {str(e)}")
+            logger.error(f"Report generation failed: {str(e)}")
             raise
+    
+    # Create DAG
+    dag = DAG(
+        'powerbi_report_generation',
+        default_args={
+            'owner': 'data-team',
+            'depends_on_past': False,
+            'start_date': days_ago(1),
+            'retries': 1,
+            'retry_delay': timedelta(minutes=5),
+        },
+        schedule_interval=timedelta(days=1),
+        catchup=False,
+        description='Generate Power BI reports using AI',
+    )
+    
+    # Add task to DAG
+    generate_report_operator = PythonOperator(
+        task_id='generate_powerbi_report',
+        python_callable=generate_report_task,
+        dag=dag,
+    )
+    
+    logger.info("Airflow DAG created successfully")
+    return dag
+
+# === API Layer ===
+# Pydantic models for API
+class ReportRequest(BaseModel):
+    data_source_name: str
+    report_requirements: str
+    enable_fabric_deployment: Optional[bool] = True
+
+class ReportResponse(BaseModel):
+    status: str
+    report_id: str
+    data_source: str
+    execution_time: float
+    report_definition: Optional[Dict[str, Any]] = None
+    selected_tables: Optional[List[str]] = None
+    sql_queries: Optional[List[str]] = None
+    dax_measures: Optional[List[Dict[str, Any]]] = None
+    visualizations: Optional[List[Dict[str, Any]]] = None
+    data_profile: Optional[Dict[str, Any]] = None
+    schema_drift: Optional[Dict[str, Any]] = None
+    fabric_deployment: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+class ErrorResponse(BaseModel):
+    status: str
+    error: str
+    details: Optional[str] = None
+
+# Global variables for API
+report_generator_instance = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage the lifecycle of the FastAPI application."""
+    global report_generator_instance
+    
+    # Load configuration
+    config = load_config()
+    
+    # Initialize report generator
+    report_generator_instance = PowerBIReportGenerator(config)
+    
+    yield
+    
+    # Cleanup
+    if report_generator_instance and report_generator_instance.autoscaler:
+        report_generator_instance.autoscaler.shutdown()
+
+# Create FastAPI app
+app = FastAPI(
+    title="Power BI Report Generator API",
+    description="API for generating Power BI reports using AI and LangChain",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Custom OpenAPI schema
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    
+    openapi_schema = get_openapi(
+        title="Power BI Report Generator API",
+        version="1.0.0",
+        description="API for generating Power BI reports using AI and LangChain",
+        routes=app.routes,
+    )
+    
+    # Add custom documentation
+    openapi_schema["info"]["x-logo"] = {
+        "url": "https://powerbi.microsoft.com/pb-desktop/images/power-bi-desktop-og.png"
+    }
+    
+    app.openapi_schema = openapi_schema
+    return openapi_schema
+
+app.openapi = custom_openapi
+
+# API endpoints
+@app.post("/generate-report", response_model=ReportResponse, responses={500: {"model": ErrorResponse}})
+@limiter.limit("100/minute")
+async def generate_report_api(request: ReportRequest, background_tasks: BackgroundTasks):
+    """Generate a Power BI report."""
+    global report_generator_instance
+    
+    if not report_generator_instance:
+        raise HTTPException(status_code=500, detail="Report generator not initialized")
+    
+    try:
+        # Generate report
+        result = report_generator_instance.generate_report(
+            request.data_source_name,
+            request.report_requirements
+        )
+        
+        return ReportResponse(**result)
+    except Exception as e:
+        logger.error(f"API error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    return {"status": "healthy"}
+
+@app.get("/metrics")
+async def metrics():
+    """Prometheus metrics endpoint."""
+    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+# === Automated Testing Framework ===
+class TestReportGenerator:
+    """Comprehensive test suite for the Power BI Report Generator."""
+    
+    def setup_method(self):
+        """Set up test environment."""
+        # Create test configuration
+        self.test_config = {
+            "openai": {
+                "api_key": "test-key",
+                "model": "gpt-4",
+                "temperature": 0.3,
+                "max_tokens": 2000,
+                "max_retries": 3
+            },
+            "fabric": {
+                "tenant_id": "test-tenant",
+                "client_id": "test-client",
+                "client_secret": "test-secret",
+                "workspace_id": "test-workspace"
+            },
+            "data_sources": {
+                "test_csv": {
+                    "type": "csv",
+                    "file_path": "test_data.csv"
+                }
+            },
+            "enable_fabric_deployment": False,
+            "enable_langsmith": False
+        }
+        
+        # Create test CSV file
+        test_data = pd.DataFrame({
+            'id': range(1, 101),
+            'name': [f'Item {i}' for i in range(1, 101)],
+            'value': np.random.randint(1, 100, 100),
+            'category': np.random.choice(['A', 'B', 'C'], 100)
+        })
+        test_data.to_csv('test_data.csv', index=False)
+        
+        # Mock OpenAI responses
+        self.mock_openai_responses()
+    
+    def teardown_method(self):
+        """Clean up test environment."""
+        # Remove test CSV file
+        if os.path.exists('test_data.csv'):
+            os.remove('test_data.csv')
+    
+    def mock_openai_responses(self):
+        """Mock OpenAI API responses for testing."""
+        # Mock table selection
+        self.table_selection_response = json.dumps(["test_data"])
+        
+        # Mock SQL generation
+        self.sql_generation_response = json.dumps({
+            "queries": ["SELECT * FROM test_data LIMIT 1000"]
+        })
+        
+        # Mock Python generation
+        self.python_generation_response = json.dumps({
+            "script": "import pandas as pd\n# Process data here"
+        })
+        
+        # Mock DAX generation
+        self.dax_generation_response = json.dumps({
+            "measures": [
+                {
+                    "name": "Total Value",
+                    "table": "test_data",
+                    "expression": "SUM(test_data[value])",
+                    "description": "Sum of all values"
+                }
+            ]
+        })
+        
+        # Mock visualization generation
+        self.visualization_generation_response = json.dumps({
+            "visualizations": [
+                {
+                    "type": "column",
+                    "title": "Value by Category",
+                    "dataFields": [
+                        {"name": "Value", "source": "test_data.value"}
+                    ],
+                    "categoryField": "test_data.category",
+                    "formatting": {"colors": ["#01B8AA", "#374649"]}
+                }
+            ]
+        })
+        
+        # Mock report definition
+        self.report_definition_response = json.dumps({
+            "pages": [
+                {
+                    "name": "Report Page",
+                    "visuals": [
+                        {
+                            "type": "column",
+                            "title": "Value by Category"
+                        }
+                    ]
+                }
+            ]
+        })
+    
+    @patch('langchain_openai.ChatOpenAI.invoke')
+    def test_sql_generation_retry_logic(self, mock_invoke):
+        """Test SQL generation retry logic."""
+        # Setup
+        self.setup_method()
+        
+        # Configure mock to fail first, then succeed
+        mock_invoke.side_effect = [
+            # First call fails
+            Exception("API error"),
+            # Second call succeeds
+            type('MockResponse', (), {'content': self.sql_generation_response})()
+        ]
+        
+        # Create report generator
+        generator = PowerBIReportGenerator(self.test_config)
+        
+        # Test
+        result = generator.generate_report("test_csv", "Generate a report")
+        
+        # Assert
+        assert result['status'] == 'success'
+        assert len(result['sql_queries']) == 1
+        assert mock_invoke.call_count == 2
+        
+        # Cleanup
+        self.teardown_method()
+    
+    @patch('requests.post')
+    def test_fabric_deployment_error_handling(self, mock_post):
+        """Test Fabric deployment error handling."""
+        # Setup
+        self.setup_method()
+        
+        # Configure mock to return error
+        mock_response = type('MockResponse', (), {
+            'status_code': 500,
+            'text': 'Internal Server Error'
+        })()
+        mock_post.return_value = mock_response
+        
+        # Enable Fabric deployment
+        self.test_config['enable_fabric_deployment'] = True
+        
+        # Create report generator
+        generator = PowerBIReportGenerator(self.test_config)
+        
+        # Test
+        result = generator.generate_report("test_csv", "Generate a report")
+        
+        # Assert
+        assert result['status'] == 'success'
+        assert result['fabric_deployment']['status'] == 'error'
+        assert '500' in result['fabric_deployment']['error']
+        
+        # Cleanup
+        self.teardown_method()
+    
+    @patch('langchain_openai.ChatOpenAI.invoke')
+    test_data_quality_analysis = mock_openai_responses
+    def test_data_quality_analysis(self, mock_invoke):
+        """Test data quality analysis."""
+        # Setup
+        self.setup_method()
+        
+        # Configure mock responses
+        mock_invoke.return_value = type('MockResponse', (), {'content': self.table_selection_response})()
+        
+        # Create report generator
+        generator = PowerBIReportGenerator(self.test_config)
+        
+        # Test
+        result = generator.generate_report("test_csv", "Generate a report")
+        
+        # Assert
+        assert result['status'] == 'success'
+        assert 'data_profile' in result
+        assert 'overall_score' in result['data_profile']
+        assert 'issues' in result['data_profile']
+        
+        # Cleanup
+        self.teardown_method()
+    
+    @patch('langchain_openai.ChatOpenAI.invoke')
+    test_schema_drift_detection = mock_openai_responses
+    def test_schema_drift_detection(self, mock_invoke):
+        """Test schema drift detection."""
+        # Setup
+        self.setup_method()
+        
+        # Configure mock responses
+        mock_invoke.return_value = type('MockResponse', (), {'content': self.table_selection_response})()
+        
+        # Create report generator
+        generator = PowerBIReportGenerator(self.test_config)
+        
+        # Test
+        result = generator.generate_report("test_csv", "Generate a report")
+        
+        # Assert
+        assert result['status'] == 'success'
+        assert 'schema_drift' in result
+        assert 'drift_detected' in result['schema_drift']
+        
+        # Cleanup
+        self.teardown_method()
+    
+    @patch('langchain_openai.ChatOpenAI.invoke')
+    test_autoscaling = mock_openai_responses
+    def test_autoscaling(self, mock_invoke):
+        """Test autoscaling functionality."""
+        # Setup
+        self.setup_method()
+        
+        # Enable autoscaling
+        self.test_config['scaling'] = {
+            "enabled": True,
+            "min_workers": 2,
+            "max_workers": 5,
+            "scale_up_threshold": 0.5,
+            "scale_down_threshold": 0.2,
+            "cooldown_period": 0
+        }
+        
+        # Configure mock responses
+        mock_invoke.return_value = type('MockResponse', (), {'content': self.table_selection_response})()
+        
+        # Create report generator
+        generator = PowerBIReportGenerator(self.test_config)
+        
+        # Test
+        result = generator.generate_report("test_csv", "Generate a report")
+        
+        # Assert
+        assert result['status'] == 'success'
+        assert generator.autoscaler.enabled
+        
+        # Cleanup
+        self.teardown_method()
 
 # === Main Application ===
 def main():
@@ -2232,41 +3871,58 @@ def main():
             logger.error("At least one data source must be configured")
             return
         
-        # Initialize report generator
-        generator = PowerBIReportGenerator(config)
-        
-        # Example usage
-        data_source_names = list(config['data_sources'].keys())
-        if data_source_names:
-            data_source_name = data_source_names[0]
-            report_requirements = """
-            Generate a comprehensive sales dashboard showing:
-            1. Monthly sales trends over time
-            2. Top performing products by revenue
-            3. Sales by region/territory with map visualization
-            4. Customer analysis with segmentation
-            5. Revenue metrics and KPIs with year-over-year comparisons
-            6. Product category performance
-            """
-            
-            logger.info(f"Generating report for data source: {data_source_name}")
-            result = generator.generate_report(data_source_name, report_requirements)
-            
-            logger.info(f"✅ Report generated successfully!")
-            logger.info(f"📊 Report ID: {result['report_id']}")
-            logger.info(f"⏱️  Execution time: {result['execution_time']}s")
-            logger.info(f"📋 Tables used: {len(result['selected_tables'])}")
-            logger.info(f"🔍 Data quality score: {result['data_profile']['overall_score'] if result['data_profile'] else 'N/A'}")
-            
-            if result.get('fabric_deployment'):
-                if result['fabric_deployment'].get('status') == 'success':
-                    logger.info(f"☁️  Report deployed to Fabric with ID: {result['fabric_deployment']['report_id']}")
-                    logger.info(f"🔗 Report URL: {result['fabric_deployment'].get('report_url', 'N/A')}")
-                else:
-                    logger.error(f"❌ Fabric deployment failed: {result['fabric_deployment'].get('error')}")
-            
+        # Check if API mode is enabled
+        if config.get('api', {}).get('enabled', False):
+            import uvicorn
+            api_config = config.get('api', {})
+            logger.info(f"Starting API server on {api_config.get('host')}:{api_config.get('port')}")
+            uvicorn.run(
+                "powerbi_generator:app",
+                host=api_config.get('host'),
+                port=api_config.get('port'),
+                reload=False
+            )
         else:
-            logger.error("No data sources configured for report generation")
+            # Initialize report generator
+            generator = PowerBIReportGenerator(config)
+            
+            # Example usage
+            data_source_names = list(config['data_sources'].keys())
+            if data_source_names:
+                data_source_name = data_source_names[0]
+                report_requirements = """
+                Generate a comprehensive sales dashboard showing:
+                1. Monthly sales trends over time
+                2. Top performing products by revenue
+                3. Sales by region/territory with map visualization
+                4. Customer analysis with segmentation
+                5. Revenue metrics and KPIs with year-over-year comparisons
+                6. Product category performance
+                """
+                
+                logger.info(f"Generating report for data source: {data_source_name}")
+                result = generator.generate_report(data_source_name, report_requirements)
+                
+                logger.info(f"✅ Report generated successfully!")
+                logger.info(f"📊 Report ID: {result['report_id']}")
+                logger.info(f"⏱️  Execution time: {result['execution_time']}s")
+                logger.info(f"📋 Tables used: {len(result['selected_tables'])}")
+                logger.info(f"🔍 Data quality score: {result['data_profile']['overall_score'] if result['data_profile'] else 'N/A'}")
+                
+                if result.get('fabric_deployment'):
+                    if result['fabric_deployment'].get('status') == 'success':
+                        logger.info(f"☁️  Report deployed to Fabric with ID: {result['fabric_deployment']['report_id']}")
+                        logger.info(f"🔗 Report URL: {result['fabric_deployment'].get('report_url', 'N/A')}")
+                    else:
+                        logger.error(f"❌ Fabric deployment failed: {result['fabric_deployment'].get('error')}")
+                
+                # Create Airflow DAG if requested
+                if AIRFLOW_AVAILABLE and os.getenv('CREATE_AIRFLOW_DAG', 'false').lower() == 'true':
+                    dag = create_airflow_dag(generator, data_source_name, report_requirements)
+                    if dag:
+                        logger.info("✅ Airflow DAG created successfully")
+            else:
+                logger.error("No data sources configured for report generation")
     
     except Exception as e:
         logger.error(f"Application error: {sanitize_log_data(str(e))}")
