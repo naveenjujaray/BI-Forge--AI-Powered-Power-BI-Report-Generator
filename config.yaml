@@ -1,16 +1,27 @@
+# AI Configuration
 openai:
   api_key: "your-openai-api-key-here"
   model: "gpt-4"
   temperature: 0.3
   max_tokens: 2000
+  max_retries: 3
+  use_azure: false
+  azure_endpoint: ""  # Optional: "https://your-resource.openai.azure.com/"
+  azure_version: ""  # Optional: "2023-12-01-preview"
+  langsmith_project: ""  # Optional: for LangSmith tracing
+  langsmith_endpoint: ""  # Optional: "https://api.smith.langchain.com"
 
+# Microsoft Fabric Configuration
 fabric:
   tenant_id: "your-tenant-id-here"
   client_id: "your-client-id-here"
   client_secret: "your-client-secret-here"
   workspace_id: "your-workspace-id-here"
   pipeline_id: "your-pipeline-id-here"  # Optional
+  capacity_id: ""  # Optional
+  api_endpoint: "https://api.fabric.microsoft.com/v1"
 
+# Data Sources Configuration
 data_sources:
   sales_data:
     type: "sql_server"
@@ -19,6 +30,9 @@ data_sources:
     username: "your-username"
     password: "your-password"
     driver: "ODBC Driver 17 for SQL Server"
+    connection_string: ""  # Optional alternative to individual params
+    connection_pool_size: 5
+    connection_timeout: 30
   
   customer_data:
     type: "postgresql"
@@ -27,6 +41,9 @@ data_sources:
     database: "your-database"
     username: "your-username"
     password: "your-password"
+    schema: "public"
+    connection_pool_size: 5
+    connection_timeout: 30
   
   product_catalog:
     type: "csv"
@@ -43,6 +60,7 @@ data_sources:
       Authorization: "Bearer your-api-token"
     params:
       limit: 100
+    paginate: false
   
   bigquery_data:
     type: "bigquery"
@@ -67,7 +85,41 @@ data_sources:
   onelake_data:
     type: "onelake"
     workspace_id: "your-workspace-id"
+  
+  # Additional data source types from LangChain implementation
+  mysql_data:
+    type: "mysql"
+    host: "your-mysql-server"
+    port: 3306
+    database: "your-database"
+    username: "your-username"
+    password: "your-password"
+  
+  oracle_data:
+    type: "oracle"
+    host: "your-oracle-server"
+    port: 1521
+    service_name: "your-service-name"
+    username: "your-username"
+    password: "your-password"
+  
+  snowflake_data:
+    type: "snowflake"
+    account: "your-account"
+    warehouse: "COMPUTE_WH"
+    database: "your-database"
+    schema: "your-schema"
+    username: "your-username"
+    password: "your-password"
+  
+  synapse_data:
+    type: "synapse"
+    server: "your-synapse-server.sql.azuresynapse.net"
+    database: "your-database"
+    username: "your-username"
+    password: "your-password"
 
+# Data Quality Configuration
 data_quality:
   enabled: true
   max_null_percentage: 30.0
@@ -83,38 +135,55 @@ data_quality:
       columns: ["product_id", "customer_id"]
       severity: "warning"
 
-max_workers: 4
-data_chunk_size: 10000
-
-enterprise_security:
+# Security Configuration
+security:
   conditional_access: true
   mfa_required: true
   device_compliance_required: true
   ip_restrictions: []
+  encryption_key: ""  # Optional: for AES encryption
+  api_key_rotation_days: 90
 
+# Compliance Configuration
 compliance:
   data_classification: "Confidential"
   retention_policy: "7_years"
   audit_logging: true
   standards: ["GDPR", "SOX", "HIPAA"]
 
+# Deployment Configuration
 deployment:
   environment: "production"
   pipeline_stages: ["dev", "test", "prod"]
   auto_deployment: false
   approval_required: true
 
+# Monitoring Configuration
 monitoring:
   application_insights: "your-application-insights-connection-string"
   log_analytics_workspace: "your-log-analytics-workspace-id"
   prometheus_endpoint: "http://prometheus:9090"
+  redis_url: "redis://localhost:6379"
+  circuit_breaker_timeout: 60  # seconds
+  rate_limit_requests: 100
+  rate_limit_period: 60  # seconds
 
-integrations:
-  azure_devops_project: "https://dev.azure.com/your-org/your-project"
-  teams_webhook: "https://outlook.office.com/webhook/your-webhook-url"
-  key_vault_url: "https://your-key-vault-name.vault.azure.net/"
+# Visualization Configuration
+visualization:
+  theme: "standard"
+  color_palette: ["#01B8AA", "#374649", "#FD625E", "#F2C80F", "#4BC0C0"]
+  font_family: "Segoe UI"
+  default_visualization_types: ["column", "line", "pie", "card", "table"]
+  enable_custom_visuals: true
 
+# Scaling Configuration
 scaling:
+  enabled: false
+  min_workers: 2
+  max_workers: 10
+  scale_up_threshold: 0.7  # 70% utilization
+  scale_down_threshold: 0.3  # 30% utilization
+  cooldown_period: 300  # seconds
   auto_scaling:
     enabled: true
     min_capacity: "F2"
@@ -137,11 +206,33 @@ scaling:
     max_concurrent_queries: 50
     incremental_refresh: true
 
+# API Configuration
+api:
+  enabled: false
+  host: "0.0.0.0"
+  port: 8000
+  cors_origins: ["*"]
+  docs_url: "/docs"
+  openapi_url: "/openapi.json"
+
+# Multi-Geo Configuration
 multi_geo_config:
   home_region: "West Europe"
   multi_geo_capacities: []
   data_residency_compliance: "GDPR"
 
+# Integration Configuration
+integrations:
+  azure_devops_project: "https://dev.azure.com/your-org/your-project"
+  teams_webhook: "https://outlook.office.com/webhook/your-webhook-url"
+  key_vault_url: "https://your-key-vault-name.vault.azure.net/"
+
+# General Configuration
+max_workers: 4
+data_chunk_size: 10000
 max_sql_generation_try: 3
 max_python_script_check: 3
 sandbox_path: "/tmp/sandbox"
+enable_fabric_deployment: true
+enable_langsmith: true
+enable_real_time_refresh: false
