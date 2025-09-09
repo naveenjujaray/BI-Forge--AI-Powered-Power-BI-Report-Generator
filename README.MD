@@ -373,8 +373,9 @@ DATA_QUALITY_SCORE = Gauge('powerbi_data_quality_score', 'Data quality score', [
 ### Project Structure
 ```
 BI-Forge--AI-Powered-Power-BI-Report-Generation-Generator/
-├── generate_report.py           # Main application code V1
-├── generate_report_langchain.py # LangChain integrated Main application code V2
+├── generate_report_v1.py        # Raw Main application code V1
+├── generate_report_v2.py        # LangChain integrated Main application code V2
+├── generate_report_v3.py        # Kafka integrated Main application code V2
 ├── config.yaml                  # Configuration file
 ├── requirements.txt             # Python dependencies
 ├── assets/                      # assets ex: images, pdf..etc
