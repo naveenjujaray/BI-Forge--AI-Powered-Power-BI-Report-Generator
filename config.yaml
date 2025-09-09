@@ -8,8 +8,8 @@ openai:
   use_azure: false
   azure_endpoint: ""  # Optional: "https://your-resource.openai.azure.com/"
   azure_version: ""  # Optional: "2023-12-01-preview"
-  langsmith_project: ""  # Optional: for LangSmith tracing
-  langsmith_endpoint: ""  # Optional: "https://api.smith.langchain.com"
+  langsmith_project: "powerbi-automation"  # Optional: for LangSmith tracing
+  langsmith_endpoint: "https://api.smith.langchain.com"  # Optional: "https://api.smith.langchain.com"
 
 # Microsoft Fabric Configuration
 fabric:
@@ -18,7 +18,7 @@ fabric:
   client_secret: "your-client-secret-here"
   workspace_id: "your-workspace-id-here"
   pipeline_id: "your-pipeline-id-here"  # Optional
-  capacity_id: ""  # Optional
+  capacity_id: "your-capacity-id-here"  # Optional
   api_endpoint: "https://api.fabric.microsoft.com/v1"
 
 # Data Sources Configuration
@@ -119,6 +119,48 @@ data_sources:
     username: "your-username"
     password: "your-password"
 
+# Streaming Configuration
+streaming:
+  enabled: true
+  kafka_bootstrap_servers: "kafka-server1:9092,kafka-server2:9092"
+  kafka_topic: "powerbi-data-stream"
+  event_hub_connection_string: "Endpoint=sb://your-namespace.servicebus.windows.net/;SharedAccessKeyName=your-policy;SharedAccessKey=your-key;EntityPath=your-eventhub"
+  event_hub_name: "powerbi-events"
+  consumer_group: "$Default"
+  checkpoint_interval: 30
+  batch_size: 100
+
+# Copilot Configuration
+copilot:
+  enabled: true
+  write_back_enabled: true
+  data_agents_enabled: true
+  grounding_context: 
+    - "Sales data includes daily transactions from all regions"
+    - "Customer data contains demographic and purchase history"
+    - "Financial data is updated quarterly"
+  terminology:
+    "Revenue": "Total income from sales before deductions"
+    "Churn Rate": "Percentage of customers who discontinued service"
+  api_key: "your-copilot-api-key"
+
+# UI Configuration
+ui:
+  low_code_enabled: true
+  interactive_dashboards: true
+  mobile_responsive: true
+  theme: "standard"
+  color_palette: ["#01B8AA", "#374649", "#FD625E", "#F2C80F", "#4BC0C0"]
+  font_family: "Segoe UI"
+
+# Advanced Analytics Configuration
+advanced_analytics:
+  predictive_modeling: true
+  natural_language_querying: true
+  automated_insights: true
+  model_path: "/models"
+  confidence_threshold: 0.7
+
 # Data Quality Configuration
 data_quality:
   enabled: true
@@ -141,7 +183,7 @@ security:
   mfa_required: true
   device_compliance_required: true
   ip_restrictions: []
-  encryption_key: ""  # Optional: for AES encryption
+  encryption_key: "your-encryption-key-here"  # Optional: for AES encryption
   api_key_rotation_days: 90
 
 # Compliance Configuration
@@ -155,8 +197,8 @@ compliance:
 deployment:
   environment: "production"
   pipeline_stages: ["dev", "test", "prod"]
-  auto_deployment: false
-  approval_required: true
+  auto_deployment: true
+  approval_required: false
 
 # Monitoring Configuration
 monitoring:
@@ -167,6 +209,9 @@ monitoring:
   circuit_breaker_timeout: 60  # seconds
   rate_limit_requests: 100
   rate_limit_period: 60  # seconds
+  enable_advanced_monitoring: true
+  performance_benchmarking: true
+  data_lineage_tracking: true
 
 # Visualization Configuration
 visualization:
@@ -178,12 +223,16 @@ visualization:
 
 # Scaling Configuration
 scaling:
-  enabled: false
+  enabled: true
   min_workers: 2
   max_workers: 10
   scale_up_threshold: 0.7  # 70% utilization
   scale_down_threshold: 0.3  # 30% utilization
   cooldown_period: 300  # seconds
+  distributed_processing: true
+  kubernetes_enabled: true
+  load_balancing: true
+  resource_optimization: true
   auto_scaling:
     enabled: true
     min_capacity: "F2"
@@ -208,7 +257,7 @@ scaling:
 
 # API Configuration
 api:
-  enabled: false
+  enabled: true
   host: "0.0.0.0"
   port: 8000
   cors_origins: ["*"]
@@ -235,4 +284,4 @@ max_python_script_check: 3
 sandbox_path: "/tmp/sandbox"
 enable_fabric_deployment: true
 enable_langsmith: true
-enable_real_time_refresh: false
+enable_real_time_refresh: true

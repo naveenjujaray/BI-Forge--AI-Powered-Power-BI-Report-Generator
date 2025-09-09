@@ -20,7 +20,7 @@ You should have received a copy of the GNU General Public License along with thi
 - Provide the complete corresponding source code when conveying object/binary forms. 📦➡️💻
 - State the significant changes you made to the work (if any). ✍️
 - License your modifications and combined works under GPL‑3.0 when you distribute them. 🔁
-- Provide “Installation Information” for User Products where required (anti‑tivoization). 🔧
+- Provide "Installation Information" for User Products where required (anti‑tivoization). 🔧
 - Do not impose additional restrictions beyond those permitted by GPL‑3.0. 🚷
 
 ## Good‑Practice Guidance (Non‑license Obligations) 💡
@@ -45,6 +45,9 @@ This project is licensed under the **GNU General Public License v3.0** - see the
 - [Security Implementation](#security-implementation)
 - [Compliance](#compliance)
 - [Monitoring & Metrics](#monitoring--metrics)
+- [Multi-Geo Support](#multi-geo-support)
+- [Enterprise Integrations](#enterprise-integrations)
+- [Scaling & Performance](#scaling--performance)
 - [Development](#development)
 - [Contributing](#contributing)
 - [License](#license)
@@ -54,7 +57,7 @@ This project is licensed under the **GNU General Public License v3.0** - see the
 
 ## Overview
 
-The Power BI AI Generator is an enterprise-grade solution that leverages OpenAI's GPT-4 to automatically generate Power BI reports from diverse data sources. This system combines advanced AI capabilities with robust security, comprehensive data quality checks, and seamless enterprise integrations to streamline business intelligence workflows.
+BI Forge is an enterprise-grade AI-powered solution that leverages OpenAI's GPT-4 to automatically generate Power BI reports from diverse data sources. This system combines advanced AI capabilities with robust security, comprehensive data quality checks, and seamless enterprise integrations to streamline business intelligence workflows at scale.
 
 ![Reporting with LLM](/assets/flowchart.png)
 
@@ -62,19 +65,23 @@ Ref: [https://medium.com/@mail2mhossain/llm-powered-reporting-transforming-tradi
 
 The system follows a sophisticated workflow:
 1. **Data Ingestion**: Connects to multiple data sources (SQL, NoSQL, APIs, cloud storage)
-2. **Query Processing**: Uses NLP to understand business requirements
-3. **AI Generation**: Creates SQL queries and Python scripts using GPT-4
-4. **Security Validation**: Sandboxes and validates all generated code
-5. **Quality Assurance**: Performs data profiling and drift detection
-6. **Deployment**: Publishes reports to Power BI with CI/CD integration
+2. **Real-time Streaming**: Processes streaming data from Kafka or Event Hubs
+3. **Query Processing**: Uses NLP to understand business requirements
+4. **AI Generation**: Creates SQL queries and Python scripts using GPT-4
+5. **Security Validation**: Sandboxes and validates all generated code
+6. **Quality Assurance**: Performs data profiling and drift detection
+7. **Copilot Integration**: Enhances reports with AI-powered insights
+8. **Deployment**: Publishes reports to Power BI with CI/CD integration
+9. **Monitoring**: Tracks performance and data quality in real-time
 
 ---
 
 ## Features
 
 ### Core Capabilities
-- **Multi-Source Data Integration**: Supports SQL Server, PostgreSQL, CSV, Excel, APIs, BigQuery, Salesforce, S3, and OneLake
+- **Multi-Source Data Integration**: Supports SQL Server, PostgreSQL, MySQL, Oracle, Snowflake, CSV, Excel, APIs, BigQuery, Salesforce, S3, OneLake, Synapse, and more
 - **AI-Powered Report Generation**: Leverages GPT-4 to transform natural language queries into Power BI reports
+- **Real-time Streaming Analytics**: Processes streaming data from Kafka or Azure Event Hubs
 - **Enterprise Security**: AES-256 encryption, JWT authentication, Azure Key Vault integration
 - **Data Quality Assurance**: Automated profiling, outlier detection, and rule-based validation
 - **Schema Drift Detection**: Real-time monitoring of structural changes in data sources
@@ -86,9 +93,12 @@ The system follows a sophisticated workflow:
 - **Natural Language Processing**: Converts business questions into technical queries
 - **Dynamic Data Profiling**: Analyzes data quality metrics (null percentages, duplicates, outliers)
 - **Code Security Sandbox**: Executes generated Python scripts in isolated environments
-- **Enterprise Integrations**: Azure DevOps, Microsoft Teams, Power Automate
+- **Power BI Copilot Integration**: AI-powered insights, write-back capabilities, and data agents
+- **Interactive Dashboards**: Low-code interface for report customization with mobile responsiveness
+- **Advanced Analytics**: Predictive modeling, natural language querying, and automated insights
 - **Multi-Geo Support**: Configurable data residency and regional compliance
 - **Real-time Monitoring**: Prometheus metrics and Application Insights integration
+- **Kubernetes Integration**: Auto-scaling and load balancing for enterprise deployments
 
 ---
 
@@ -97,33 +107,33 @@ The system follows a sophisticated workflow:
 The system follows a modular, enterprise-grade architecture with clear separation of concerns:
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│    BI Forge: AI-Powered Power BI Report Generation Generator     │
-├──────────────────────────────────────────────────────────────────┤
-│  ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐  │
-│  │   Data Sources   │ │   AI Engine      │ │   Security       │  │
-│  │                  │ │                  │ │                  │  │
-│  │ • SQL Server     │ │ • GPT-4          │ │ • AES-256        │  │
-│  │ • PostgreSQL     │ │ • Query Gen      │ │ • JWT Auth       │  │
-│  │ • BigQuery       │ │ • Code Gen       │ │ • Key Vault      │  │
-│  │ • Salesforce     │ │ • Validation     │ │ • RBAC           │  │
-│  └──────────────────┘ └──────────────────┘ └──────────────────┘  │
-├──────────────────────────────────────────────────────────────────┤
-│  ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐  │
-│  │   Data Quality   │ │   Deployment     │ │   Monitoring     │  │
-│  │                  │ │                  │ │                  │  │
-│  │ • Profiling      │ │ • CI/CD Pipeline │ │ • Prometheus     │  │
-│  │ • Drift Detect   │ │ • Stage Mgmt     │ │ • App Insights   │  │
-│  │ • Validation     │ │ • Approval WF    │ │ • Alerting       │  │
-│  └──────────────────┘ └──────────────────┘ └──────────────────┘  │
-├──────────────────────────────────────────────────────────────────┤
-│  ┌─────────────────────────────────────────────────────────────┐ │
-│  │              Enterprise Integration Layer                   │ │
-│  │                                                             │ │
-│  │ • Azure DevOps     • Microsoft Teams    • Power Automate    │ │
-│  │ • Compliance Reporting • Audit Logging                      │ │
-│  └─────────────────────────────────────────────────────────────┘ │
-└──────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                    BI Forge: AI-Powered Power BI Report Generator                │
+├──────────────────────────────────────────────────────────────────────────────────┤
+│  ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐ ┌──────────────┐ │
+│  │   Data Sources   │ │   Streaming      │ │   AI Engine      │ │   Security   │ │
+│  │                  │ │                  │ │                  │ │              │ │
+│  │ • SQL Server     │ │ • Kafka          │ │ • GPT-4          │ │ • AES-256    │ │
+│  │ • PostgreSQL     │ │ • Event Hubs     │ │ • Query Gen      │ │ • JWT Auth   │ │
+│  │ • BigQuery       │ │ • Real-time Proc │ │ • Code Gen       │ │ • Key Vault  │ │
+│  │ • Salesforce     │ │ • Batch Proc     │ │ • Validation     │ │ • RBAC       │ │
+│  └──────────────────┘ └──────────────────┘ └──────────────────┘ └──────────────┘ │
+├──────────────────────────────────────────────────────────────────────────────────┤
+│  ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐ ┌──────────────┐ │
+│  │   Data Quality   │ │   Copilot        │ │   Deployment     │ │   Monitoring │ │
+│  │                  │ │                  │ │                  │ │              │ │
+│  │ • Profiling      │ │ • Insights       │ │ • CI/CD Pipeline │ │ • Prometheus │ │
+│  │ • Drift Detect   │ │ • Write-back     │ │ • Stage Mgmt     │ │ • AppInsights│ │
+│  │ • Validation     │ │ • Data Agents    │ │ • Approval WF    │ │ • Alerting   │ │
+│  └──────────────────┘ └──────────────────┘ └──────────────────┘ └──────────────┘ │
+├──────────────────────────────────────────────────────────────────────────────────┤
+│  ┌─────────────────────────────────────────────────────────────────────────────┐ │
+│  │              Enterprise Integration & Scaling Layer                         │ │
+│  │                                                                             │ │
+│  │ • Azure DevOps  • Microsoft Teams  • Power Automate  • Kubernetes           │ │
+│  │ • Multi-Geo     • Compliance Reporting • Audit Logging • Auto-scaling       │ │
+│  └─────────────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Component Details
@@ -140,17 +150,11 @@ The system follows a modular, enterprise-grade architecture with clear separatio
 | Compliance Management | ✅ Thorough | A+ | Support for GDPR, SOX, and HIPAA; data classification; retention policies; audit trails; compliance reporting |
 | Performance Optimization | ✅ Advanced | A+ | Redis caching with cluster support; auto-scaling configuration; query optimization; incremental refresh capabilities |
 | Monitoring & Alerting | ✅ Comprehensive | A+ | Prometheus metrics collection; Application Insights integration; custom health checks; Teams notification system |
+| Streaming Analytics | ✅ Real-time | A+ | Kafka and Event Hub integration; batch processing; checkpoint management; real-time data processing capabilities |
+| Copilot Integration | ✅ AI-Enhanced | A+ | AI-powered insights generation; write-back capabilities; data agents; terminology management; grounding context |
+| Multi-Geo Support | ✅ Global | A+ | Configurable data residency; regional compliance; multi-geo capacities; home region configuration |
+| Kubernetes Integration | ✅ Scalable | A+ | Auto-scaling; load balancing; resource optimization; health checks; distributed processing |
 
----
-# 📊 Industry Comparison (2025 Standards)
-
-| Feature              | This Implementation | Industry Average | Market Leaders |
-|-----------------------|---------------------|-----------------|----------------|
-| **AI Integration**    | ★★★★★ (95%)         | ★★★☆☆ (60%)     | ★★★★☆ (80%)    |
-| **Security & Governance** | ★★★★★ (95%)    | ★★★☆☆ (65%)     | ★★★★☆ (85%)    |
-| **Scalability**       | ★★★★☆ (85%)        | ★★☆☆☆ (50%)     | ★★★★☆ (80%)    |
-| **Data Source Coverage** | ★★★★★ (95%)     | ★★★☆☆ (60%)     | ★★★★☆ (75%)    |
-| **Automation Depth**  | ★★★★★ (90%)        | ★★☆☆☆ (45%)     | ★★★☆☆ (70%)    |
 ---
 
 ## Prerequisites
@@ -161,6 +165,8 @@ The system follows a modular, enterprise-grade architecture with clear separatio
 - **Azure Account**: For enterprise features (Key Vault, DevOps, Monitoring)
 - **Data Source Access**: Credentials for all configured data sources
 - **Redis Server**: For caching (optional but recommended)
+- **Kafka/Event Hub**: For streaming analytics (optional)
+- **Kubernetes Cluster**: For advanced scaling (optional)
 
 ---
 
@@ -169,8 +175,7 @@ The system follows a modular, enterprise-grade architecture with clear separatio
 1. **Clone the repository**
    ```bash
    git clone https://github.com/naveenjujaray/BI-Forge--AI-Powered-Power-BI-Report-Generation-Generator.git
-   cd BI-Forge--AI-Powered-Power-BI-Report-Generator
-
+   cd BI-Forge--AI-Powered-Power-BI-Report-Generation-Generator
    ```
 
 2. **Install dependencies**
@@ -186,7 +191,7 @@ The system follows a modular, enterprise-grade architecture with clear separatio
 
 4. **Verify installation**
    ```bash
-   python -c "from generate_report import PowerBIGenerator; print('Installation successful')"
+   python -c "from generate_report_v3 import PowerBIGenerator; print('Installation successful')"
    ```
 
 ---
@@ -202,12 +207,19 @@ openai:
   model: "gpt-4"
   temperature: 0.3
   max_tokens: 2000
+  max_retries: 3
+  use_azure: false
+  langsmith_project: "powerbi-automation"
+  langsmith_endpoint: "https://api.smith.langchain.com"
 
 fabric:
   tenant_id: "your-tenant-id"
   client_id: "your-client-id"
   client_secret: "your-client-secret"
   workspace_id: "your-workspace-id"
+  pipeline_id: "your-pipeline-id"
+  capacity_id: "your-capacity-id"
+  api_endpoint: "https://api.fabric.microsoft.com/v1"
 ```
 
 ### Data Sources
@@ -215,10 +227,12 @@ fabric:
 data_sources:
   sales_data:
     type: "sql_server"
-    server: "your-server.database.windows.net"
-    database: "your-database"
+    server: "your-server-name.database.windows.net"
+    database: "your-database-name"
     username: "your-username"
     password: "your-password"
+    connection_pool_size: 5
+    connection_timeout: 30
   
   customer_data:
     type: "postgresql"
@@ -227,15 +241,62 @@ data_sources:
     database: "your-database"
     username: "your-username"
     password: "your-password"
+    schema: "public"
+  
+  streaming_data:
+    type: "kafka"
+    bootstrap_servers: "kafka-server1:9092,kafka-server2:9092"
+    topic: "powerbi-data-stream"
+    consumer_group: "$Default"
+```
+
+### Streaming Configuration
+```yaml
+streaming:
+  enabled: true
+  kafka_bootstrap_servers: "kafka-server1:9092,kafka-server2:9092"
+  kafka_topic: "powerbi-data-stream"
+  event_hub_connection_string: "Endpoint=sb://your-namespace.servicebus.windows.net/;SharedAccessKeyName=your-policy;SharedAccessKey=your-key;EntityPath=your-eventhub"
+  event_hub_name: "powerbi-events"
+  consumer_group: "$Default"
+  checkpoint_interval: 30
+  batch_size: 100
+```
+
+### Copilot Configuration
+```yaml
+copilot:
+  enabled: true
+  write_back_enabled: true
+  data_agents_enabled: true
+  grounding_context: 
+    - "Sales data includes daily transactions from all regions"
+    - "Customer data contains demographic and purchase history"
+  terminology:
+    "Revenue": "Total income from sales before deductions"
+    "Churn Rate": "Percentage of customers who discontinued service"
+  api_key: "your-copilot-api-key"
+```
+
+### Advanced Analytics Configuration
+```yaml
+advanced_analytics:
+  predictive_modeling: true
+  natural_language_querying: true
+  automated_insights: true
+  model_path: "/models"
+  confidence_threshold: 0.7
 ```
 
 ### Security & Compliance
 ```yaml
-enterprise_security:
+security:
   conditional_access: true
   mfa_required: true
   device_compliance_required: true
   ip_restrictions: []
+  encryption_key: "your-encryption-key-here"
+  api_key_rotation_days: 90
 
 compliance:
   data_classification: "Confidential"
@@ -244,13 +305,36 @@ compliance:
   standards: ["GDPR", "SOX", "HIPAA"]
 ```
 
+### Scaling Configuration
+```yaml
+scaling:
+  enabled: true
+  min_workers: 2
+  max_workers: 10
+  scale_up_threshold: 0.7
+  scale_down_threshold: 0.3
+  cooldown_period: 300
+  distributed_processing: true
+  kubernetes_enabled: true
+  load_balancing: true
+  resource_optimization: true
+  auto_scaling:
+    enabled: true
+    min_capacity: "F2"
+    max_capacity: "F64"
+    scale_triggers:
+      cpu_threshold: 80
+      memory_threshold: 85
+      concurrent_users: 1000
+```
+
 ---
 
 ## Usage
 
 ### Basic Example
 ```python
-from generate_report import PowerBIGenerator
+from generate_report_v3 import PowerBIGenerator
 
 # Initialize generator
 generator = PowerBIGenerator(config_path="config.yaml")
@@ -267,25 +351,83 @@ report = generator.generate_report(
 deployment_result = generator.deploy_to_powerbi(report)
 ```
 
+### Streaming Analytics Example
+```python
+# Initialize streaming processor
+stream_processor = RealTimeDataProcessor(config)
+
+# Register a processor for streaming data
+def process_sales_data(data):
+    # Process real-time sales data
+    processed_data = transform_data(data)
+    update_dashboard(processed_data)
+    return processed_data
+
+stream_processor.register_processor("sales_data", process_sales_data)
+
+# Start processing streaming data
+result = stream_processor.process_streaming_data({
+    "source": "kafka",
+    "data_source": "sales_data"
+})
+```
+
+### Copilot Integration Example
+```python
+# Initialize Power BI Copilot
+copilot = PowerBICopilot(config)
+
+# Generate insights from data
+insights = copilot.generate_insights(
+    data=sales_dataframe,
+    question="What are the key trends in our sales data?"
+)
+
+# Create a data agent for automated analysis
+agent = copilot.create_data_agent({
+    "name": "Sales Performance Analyzer",
+    "description": "Analyzes daily sales performance",
+    "dataset_id": "sales_dataset",
+    "schedule": "daily",
+    "tasks": ["trend_analysis", "anomaly_detection"]
+})
+
+# Generate DAX measures
+dax_measures = copilot.generate_dax_measures(
+    table_name="Sales",
+    columns=["Date", "Product", "Revenue", "Quantity"],
+    requirements="Create measures for total revenue, year-over-year growth, and top products"
+)
+```
+
+### Advanced Analytics Example
+```python
+# Enable predictive modeling
+if config.advanced_analytics.predictive_modeling:
+    # Train a predictive model
+    model = train_predictive_model(
+        data=sales_data,
+        target="Revenue",
+        features=["Quantity", "Discount", "Region"]
+    )
+    
+    # Generate predictions
+    predictions = model.predict(future_data)
+    
+    # Add predictions to dashboard
+    dashboard.add_predictions(predictions)
+```
+
 ### Command Line Interface
 ```bash
 # Generate a report
-python generate_report.py --query "Show quarterly sales trends by region" --output sales_dashboard.pbit
+python generate_report_v3.py --query "Show quarterly sales trends by region" --output sales_dashboard.pbit
 
 # Deploy to specific stage
-python generate_report.py --deploy --stage "prod" --report-id "report-123"
-```
+python generate_report_v3.py --deploy --stage "prod" --report-id "report-123"
 
-### Advanced Features
-```python
-# Data quality profiling
-profile = generator.data_profiler.profile_data(dataframe, "sales_data")
-
-# Schema drift detection
-drift_result = generator.drift_detector.detect_schema_drift("sales_data", current_schema)
-
-# Compliance reporting
-compliance_report = generator.compliance_manager.generate_compliance_report()
+# Process streaming data
+python generate_report_v3.py --stream --source "kafka" --topic "sales-data"
 ```
 
 ---
@@ -296,16 +438,19 @@ compliance_report = generator.compliance_manager.generate_compliance_report()
 - **AES-256 Encryption**: All sensitive data encrypted using PBKDF2 key derivation
 - **Secure Storage**: Azure Key Vault integration for credential management
 - **Data Masking**: Automatic masking of sensitive fields in logs and reports
+- **API Key Rotation**: Automatic rotation of API keys based on configured intervals
 
 ### Authentication & Authorization
 - **JWT Tokens**: Configurable token expiration and validation
 - **Service Principals**: Azure AD authentication for enterprise environments
 - **Conditional Access**: IP restrictions and MFA enforcement
+- **Role-Based Access Control**: Granular permissions for different user roles
 
 ### Code Security
 - **Sandbox Execution**: Generated Python scripts executed in isolated environments
 - **Input Validation**: Comprehensive validation of all user inputs
 - **Audit Logging**: Complete audit trail of all security events
+- **Circuit Breaker Pattern**: Prevents system overload during failures
 
 ```python
 # Example of secure credential handling
@@ -331,6 +476,7 @@ class SecurityHardeningManager:
 - **Retention Policies**: Configurable data retention and deletion
 - **Audit Reporting**: Comprehensive compliance documentation
 - **Consent Management**: User consent tracking and management
+- **Multi-Geo Compliance**: Data residency and regional compliance management
 
 ```python
 # Compliance reporting example
@@ -340,7 +486,8 @@ class FabricComplianceManager:
             "status": "compliant",
             "last_audit": datetime.now().isoformat(),
             "standards": ["GDPR", "SOX", "HIPAA"],
-            "data_classification": "Confidential"
+            "data_classification": "Confidential",
+            "data_residency": "West Europe"
         }
 ```
 
@@ -353,17 +500,128 @@ class FabricComplianceManager:
 - **Data Quality**: Quality scores and issue tracking
 - **System Health**: Memory usage, CPU utilization, connection counts
 - **Business Metrics**: Report generation times, deployment success rates
+- **Streaming Metrics**: Data processing rates, lag times, error counts
 
 ### Monitoring Integration
 - **Prometheus**: Real-time metrics collection and alerting
 - **Application Insights**: Application performance monitoring
 - **Azure Monitor**: Infrastructure and dependency monitoring
 - **Teams Notifications**: Real-time alerts and notifications
+- **Redis**: Caching metrics and performance monitoring
 
 ```python
 # Prometheus metrics example
 REQUEST_COUNT = Counter('powerbi_requests_total', 'Total Power BI requests', ['endpoint', 'status'])
 DATA_QUALITY_SCORE = Gauge('powerbi_data_quality_score', 'Data quality score', ['data_source'])
+STREAMING_DATA_PROCESSED = Counter('streaming_data_processed_total', 'Total streaming data processed', ['source'])
+HUMAN_INTERACTION_COUNT = Counter('human_interaction_total', 'Total human interactions', ['type'])
+COPILOT_ACTION_COUNT = Counter('copilot_action_total', 'Total Copilot actions', ['action'])
+```
+
+---
+
+## Multi-Geo Support
+
+### Global Deployment
+- **Home Region Configuration**: Designate primary region for data processing
+- **Multi-Geo Capacities**: Distribute workloads across multiple regions
+- **Data Residency Compliance**: Ensure data stays within specified geographic boundaries
+- **Regional Failover**: Automatic failover to secondary regions during outages
+
+### Configuration
+```yaml
+multi_geo_config:
+  home_region: "West Europe"
+  multi_geo_capacities: 
+    - region: "North Europe"
+      capacity_id: "capacity-ne-01"
+    - region: "West US"
+      capacity_id: "capacity-wus-01"
+  data_residency_compliance: "GDPR"
+```
+
+### Benefits
+- **Compliance**: Meets regional data protection requirements
+- **Performance**: Reduces latency by processing data closer to users
+- **Resilience**: Geographic redundancy for disaster recovery
+- **Scalability**: Distributes load across multiple regions
+
+---
+
+## Enterprise Integrations
+
+### Azure DevOps
+- **CI/CD Pipeline**: Automated deployment through Dev, Test, and Prod environments
+- **Artifact Management**: Store and version report artifacts
+- **Work Item Tracking**: Track report requirements and issues
+- **Test Automation**: Automated testing of generated reports
+
+### Microsoft Teams
+- **Notifications**: Real-time alerts for report generation and deployment
+- **Collaboration**: Discuss reports and provide feedback within Teams
+- **Approvals**: Streamlined approval workflows within Teams channels
+- **Bots**: Interactive bots for report generation and management
+
+### Power Automate
+- **Workflow Automation**: Automate business processes based on report insights
+- **Data Synchronization**: Keep data sources synchronized
+- **Approval Workflows**: Custom approval processes for report deployment
+- **Notification Systems**: Custom notification rules and actions
+
+### Configuration
+```yaml
+integrations:
+  azure_devops_project: "https://dev.azure.com/your-org/your-project"
+  teams_webhook: "https://outlook.office.com/webhook/your-webhook-url"
+  key_vault_url: "https://your-key-vault-name.vault.azure.net/"
+```
+
+---
+
+## Scaling & Performance
+
+### Auto-Scaling
+- **Dynamic Worker Management**: Automatically scale workers based on load
+- **Resource Optimization**: Optimize resource utilization across the system
+- **Kubernetes Integration**: Native support for Kubernetes deployments
+- **Load Balancing**: Distribute requests across multiple instances
+
+### Performance Optimization
+- **Query Optimization**: Advanced query optimization techniques
+- **Incremental Refresh**: Refresh only changed data to improve performance
+- **Caching Strategy**: Multi-level caching for frequently accessed data
+- **Connection Pooling**: Efficient management of database connections
+
+### Configuration
+```yaml
+scaling:
+  enabled: true
+  min_workers: 2
+  max_workers: 10
+  scale_up_threshold: 0.7
+  scale_down_threshold: 0.3
+  cooldown_period: 300
+  distributed_processing: true
+  kubernetes_enabled: true
+  load_balancing: true
+  resource_optimization: true
+  auto_scaling:
+    enabled: true
+    min_capacity: "F2"
+    max_capacity: "F64"
+    scale_triggers:
+      cpu_threshold: 80
+      memory_threshold: 85
+      concurrent_users: 1000
+  caching:
+    redis_cluster:
+      enabled: true
+      nodes: 3
+      memory_per_node: "8GB"
+  performance_optimization:
+    query_timeout: 300
+    max_concurrent_queries: 50
+    incremental_refresh: true
 ```
 
 ---
@@ -375,11 +633,11 @@ DATA_QUALITY_SCORE = Gauge('powerbi_data_quality_score', 'Data quality score', [
 BI-Forge--AI-Powered-Power-BI-Report-Generation-Generator/
 ├── generate_report_v1.py        # Raw Main application code V1
 ├── generate_report_v2.py        # LangChain integrated Main application code V2
-├── generate_report_v3.py        # Kafka integrated Main application code V2
+├── generate_report_v3.py        # Kafka integrated Main application code V3
 ├── config.yaml                  # Configuration file
 ├── requirements.txt             # Python dependencies
 ├── assets/                      # assets ex: images, pdf..etc
-├── README                       # GitHub README
+├── README.md                    # This file
 └── LICENSE                      # MIT License
 ```
 
@@ -391,22 +649,23 @@ BI-Forge--AI-Powered-Power-BI-Report-Generation-Generator/
 
 2. Run tests:
    ```bash
-   pytest tests/ --cov=generate_report
+   pytest tests/ --cov=generate_report_v3
    ```
 
 3. Format code:
    ```bash
-   black generate_report.py
-   isort generate_report.py
+   black generate_report_v3.py
+   isort generate_report_v3.py
    ```
 
 ### Key Dependencies
 - **Core**: pandas, numpy, pydantic
-- **AI**: openai, scikit-learn
+- **AI**: openai, scikit-learn, langchain
 - **Security**: pycryptodome, PyJWT
 - **Cloud**: azure-identity, boto3, google-cloud-bigquery
 - **Monitoring**: prometheus-client, redis
-- **Web**: requests, aiohttp
+- **Streaming**: kafka-python, azure-eventhub
+- **Web**: requests, aiohttp, fastapi
 
 ---
 
@@ -425,6 +684,8 @@ Please follow these steps:
 - Write comprehensive tests for new features
 - Update documentation for API changes
 - Ensure all security best practices are followed
+- Test with multiple data sources and configurations
+
 ---
 
 Made with ❤️ by Naveen Jujaray
