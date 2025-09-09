@@ -671,58 +671,58 @@ BI-Forge--AI-Powered-Power-BI-Report-Generation-Generator/
 ---
 
 
-## Future Updates List
 
-### 1. Syntax and Logging Fixes
-- Fix unclosed logger handler list in `logging.basicConfig()`
-- Correct function definitions missing colons (using `->` instead of `->`)
+## Future Updates List 📋
 
-### 2. Configuration Management
-- Replace deeply nested defaults with YAML schema file
-- Implement Pydantic's Settings functionality for configuration validation and overrides
+### 1. Syntax and Logging Fixes 🔧
+- Fix unclosed logger handler list in `logging.basicConfig()` 🔌
+- Correct function definitions missing colons (using `->` instead of `->`) ✏️
 
-### 3. Connector Factory and DRY Principles
-- Introduce a ConnectorFactory to map types to classes
-- Extract common logic into base Connector class
-- Refactor `_initialize_data_source_connectors` to use the factory
+### 2. Configuration Management ⚙️
+- Replace deeply nested defaults with YAML schema file 📄
+- Implement Pydantic's Settings functionality for configuration validation and overrides ✅
 
-### 4. Resource Cleanup and Context Managers
-- Add missing `disconnect()` calls on error paths
-- Implement context managers for connectors to ensure proper cleanup
+### 3. Connector Factory and DRY Principles 🏭
+- Introduce a ConnectorFactory to map types to classes 🗺️
+- Extract common logic into base Connector class 🧩
+- Refactor `_initialize_data_source_connectors` to use the factory 🔄
 
-### 5. Error Handling and Logging
-- Replace broad `except Exception` with specific exception types
-- Implement proper exception traceback logging with `logger.exception(...)`
+### 4. Resource Cleanup and Context Managers 🧹
+- Add missing `disconnect()` calls on error paths 🚫
+- Implement context managers for connectors to ensure proper cleanup 🔄
 
-### 6. Security and Sensitive Data
-- Apply `sanitize_log_data()` to all exception messages before logging
-- Replace environment variables with Azure/Key Vault or AWS Secrets Manager for credentials
+### 5. Error Handling and Logging 🚨
+- Replace broad `except Exception` with specific exception types 🎯
+- Implement proper exception traceback logging with `logger.exception(...)` 📊
 
-### 7. Rate Limiting and Concurrency
-- Make RateLimiter and AutoScaler thread-safe with proper locking
-- Consider using existing libraries (tokensbucket, ratelimit) instead of custom implementation
+### 6. Security and Sensitive Data 🔒
+- Apply `sanitize_log_data()` to all exception messages before logging 🧼
+- Replace environment variables with Azure/Key Vault or AWS Secrets Manager for credentials 🛡️
 
-### 8. Simplify Report Generation Workflow
+## 7. Rate Limiting and Concurrency ⏱️
+- Make RateLimiter and AutoScaler thread-safe with proper locking 🔒
+- Consider using existing libraries (tokensbucket, ratelimit) instead of custom implementation 📚
+
+### 8. Simplify Report Generation Workflow 📊
 - Break monolithic `PowerBIReportGenerator.generate_report` into smaller private methods:
-  - `_detect_drift`
-  - `_select_tables`
-  - `_profile_data`
-  - `_build_report`
+  - `_detect_drift` 🔍
+  - `_select_tables` 📋
+  - `_profile_data` 📈
+  - `_build_report` 🏗️
 
-### 9. Testing and Validation
+### 9. Testing and Validation 🧪
 - Write comprehensive unit tests for:
-  - Each connector class
-  - Data profiler
-  - Schema drift detector
-  - Main workflow
-- Implement mocks for external dependencies (database, OpenAI, Fabric)
+  - Each connector class 🔌
+  - Data profiler 📊
+  - Schema drift detector 🔍
+  - Main workflow 🔄
+- Implement mocks for external dependencies (database, OpenAI, Fabric) 🎭
 
-### 10. Documentation and Typing
-- Add comprehensive docstrings with parameter and return descriptions
-- Complete type hints for all public methods and classes
-- Separate CLI entrypoint into its own module
-- Implement proper CLI using `argparse` or `click`
-
+### 10. Documentation and Typing 📖
+- Add comprehensive docstrings with parameter and return descriptions 📝
+- Complete type hints for all public methods and classes 🔤
+- Separate CLI entrypoint into its own module 🖥️
+- Implement proper CLI using `argparse` or `click` 🎛️
 ---
 
 ## Contributing
