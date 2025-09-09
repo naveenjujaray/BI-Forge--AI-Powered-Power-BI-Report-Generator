@@ -1,4 +1,5 @@
 import os
+import io
 import re
 import json
 import time
@@ -47,6 +48,7 @@ from azure.storage.filedatalake import DataLakeServiceClient
 from azure.keyvault.secrets import SecretClient
 from azure.synapse.artifacts import ArtifactsClient
 from msal import ConfidentialClientApplication
+from azure.eventhub import EventData
 from azure.eventhub import EventHubProducerClient, EventHubConsumerClient
 from azure.eventhub.exceptions import EventHubError
 
@@ -262,13 +264,14 @@ class DataSourceConfig(BaseModel):
     @classmethod
     def validate_source_type(cls, v: str) -> str:
         allowed_types = [
-            'sql_server', 'postgresql', 'mysql', 'csv', 'excel', 'api', 
-            'bigquery', 'salesforce', 's3', 'redshift', 'onelake', 'semantic_model',
-            'oracle', 'snowflake', 'mongodb', 'synapse', 'kafka', 'event_hub'
-        ]
+            'sql_server','postgresql','mysql','csv','excel','api',
+            'bigquery','salesforce','s3','redshift','onelake','semantic_model',
+            'oracle','snowflake','mongodb','synapse','kafka','event_hub'
+        ],
         if v not in allowed_types:
             raise ValueError(f'Invalid source_type: {v}. Allowed types: {", ".join(allowed_types)}')
         return v
+
 
 class DataQualityConfig(BaseModel):
     enabled: bool = True
@@ -742,7 +745,7 @@ class RealTimeDataProcessor:
         elif source == 'event_hub' and self.event_hub_producer:
             try:
                 event_data_batch = self.event_hub_producer.create_batch()
-                event_data_batch.add(EventHubData(json.dumps(data).encode('utf-8')))
+                event_data_batch.add(EventData(json.dumps(data).encode('utf-8')))
                 self.event_hub_producer.send_batch(event_data_batch)
                 return {"status": "success", "message": "Data published to Event Hub"}
             except Exception as e:
@@ -3909,150 +3912,6 @@ class OneLakeConnector(DataSourceConnector):
             logger.error(f"Failed to execute query on OneLake: {str(e)}")
             return pd.DataFrame()
 
-class MySQLConnector(DataSourceConnector):
-    """Connector for MySQL databases."""
-    
-    def connect(self) -> bool:
-        """Connect to MySQL."""
-        try:
-            connection_string = (
-                f"mysql+pymysql://{self.config.get('username')}:{self.config.get('password')}"
-                f"@{self.config.get('host')}:{self.config.get('port', 3306)}/{self.config.get('database')}"
-            )
-            
-            self.connection_pool = create_engine(
-                connection_string,
-                pool_size=self.config.get('connection_pool_size', 5),
-                pool_timeout=self.config.get('connection_timeout', 30)
-            )
-            
-            # Test connection
-            with self.connection_pool.connect() as conn:
-                conn.execute("SELECT 1")
-            
-            logger.info("Connected to MySQL")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to connect to MySQL: {str(e)}")
-            return False
-    
-    def disconnect(self) -> None:
-        """Disconnect from MySQL."""
-        if self.connection_pool:
-            self.connection_pool.dispose()
-            self.connection_pool = None
-            logger.info("Disconnected from MySQL")
-    
-    def get_schema(self) -> Dict[str, Any]:
-        """Get the schema of the MySQL database."""
-        try:
-            with self.connection_pool.connect() as conn:
-                # Get all tables
-                tables_query = """
-                SELECT table_name 
-                FROM information_schema.tables 
-                WHERE table_type = 'BASE TABLE'
-                """
-                tables_result = conn.execute(tables_query)
-                tables = tables_result.fetchall()
-                
-                schema = {}
-                
-                for (table_name,) in tables:
-                    columns_query = """
-                    SELECT column_name, data_type, is_nullable
-                    FROM information_schema.columns
-                    WHERE table_name = %s
-                    ORDER BY ordinal_position
-                    """
-                    columns_result = conn.execute(columns_query, (table_name,))
-                    columns = columns_result.fetchall()
-                    
-                    schema[table_name] = {
-                        "columns": [
-                            {
-                                "name": column_name,
-                                "type": data_type,
-                                "nullable": is_nullable == "YES"
-                            }
-                            for column_name, data_type, is_nullable in columns
-                        ]
-                    }
-            
-            return schema
-            
-        except Exception as e:
-            logger.error(f"Failed to get schema from MySQL: {str(e)}")
-            return {}
-    
-    def get_data(self, tables: List[str], columns: Optional[List[str]] = None, 
-                where_clause: Optional[str] = None, limit: Optional[int] = None) -> pd.DataFrame:
-        """Get data from MySQL."""
-        try:
-            all_data = []
-            
-            for table in tables:
-                # Build query
-                column_list = "*"
-                if columns:
-                    column_list = ", ".join(columns)
-                
-                query = f"SELECT {column_list} FROM {table}"
-                
-                if where_clause:
-                    query += f" WHERE {where_clause}"
-                
-                if limit:
-                    query += f" LIMIT {limit}"
-                
-                # Execute query
-                with self.connection_pool.connect() as conn:
-                    result = conn.execute(query)
-                    data = result.fetchall()
-                    
-                    # Get column names
-                    column_names = [desc[0] for desc in result.cursor.description]
-                    
-                    # Convert to DataFrame
-                    df = pd.DataFrame(data, columns=column_names)
-                    all_data.append(df)
-            
-            # Combine all data
-            if len(all_data) == 1:
-                return all_data[0]
-            elif len(all_data) > 1:
-                # Merge dataframes on common columns
-                result_df = all_data[0]
-                for df in all_data[1:]:
-                    # Find common columns
-                    common_cols = list(set(result_df.columns) & set(df.columns))
-                    if common_cols:
-                        result_df = pd.merge(result_df, df, on=common_cols, how="inner")
-                return result_df
-            else:
-                return pd.DataFrame()
-                
-        except Exception as e:
-            logger.error(f"Failed to get data from MySQL: {str(e)}")
-            return pd.DataFrame()
-    
-    def execute_query(self, query: str) -> pd.DataFrame:
-        """Execute a custom query on MySQL."""
-        try:
-            with self.connection_pool.connect() as conn:
-                result = conn.execute(query)
-                data = result.fetchall()
-                
-                # Get column names
-                column_names = [desc[0] for desc in result.cursor.description]
-                
-                # Convert to DataFrame
-                return pd.DataFrame(data, columns=column_names)
-                
-        except Exception as e:
-            logger.error(f"Failed to execute query on MySQL: {str(e)}")
-            return pd.DataFrame()
 
 class OracleConnector(DataSourceConnector):
     """Connector for Oracle databases."""
