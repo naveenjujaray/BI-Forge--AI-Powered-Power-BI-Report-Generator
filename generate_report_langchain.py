@@ -3771,7 +3771,6 @@ class TestReportGenerator:
         self.teardown_method()
     
     @patch('langchain_openai.ChatOpenAI.invoke')
-    test_data_quality_analysis = mock_openai_responses
     def test_data_quality_analysis(self, mock_invoke):
         """Test data quality analysis."""
         # Setup
@@ -3796,7 +3795,6 @@ class TestReportGenerator:
         self.teardown_method()
     
     @patch('langchain_openai.ChatOpenAI.invoke')
-    test_schema_drift_detection = mock_openai_responses
     def test_schema_drift_detection(self, mock_invoke):
         """Test schema drift detection."""
         # Setup
@@ -3820,7 +3818,6 @@ class TestReportGenerator:
         self.teardown_method()
     
     @patch('langchain_openai.ChatOpenAI.invoke')
-    test_autoscaling = mock_openai_responses
     def test_autoscaling(self, mock_invoke):
         """Test autoscaling functionality."""
         # Setup
