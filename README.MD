@@ -686,7 +686,7 @@ scaling:
 ## Development
 
 ### Project Structure
-
+```
 📁 Project Root
 ├── 📁 .dist/
 ├── 📁 .venv/
@@ -710,7 +710,7 @@ scaling:
 ├── 📄 README.md
 ├── 📄 requirements.txt
 └── 📄 workflow_orchestrator.py
-
+```
 
 ### Development Setup
 1. Install development dependencies:
