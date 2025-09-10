@@ -667,18 +667,31 @@ scaling:
 ## Development
 
 ### Project Structure
-```
-BI-Forge--AI-Powered-Power-BI-Report-Generation-Generator/
-├── generate_report_v1.py        # Raw Main application code V1
-├── generate_report_v2.py        # LangChain integrated Main application code V2
-├── generate_report_v3.py        # Kafka integrated Main application code V3
-├── config.yaml                  # Configuration file
-├── requirements.txt             # Python dependencies
-├── archive/                     # older files
-├── assets/                      # assets ex: images, pdf..etc
-├── README.md                    # This file
-└── LICENSE                      # MIT License
-```
+
+📁 Project Root
+├── 📁 .dist/
+├── 📁 .venv/
+├── 📁 ai_agents/
+│   ├── 📄 __init__.py
+│   ├── 📄 agent_framework.py
+│   ├── 📄 specialized_agents_continued.py
+│   └── 📄 specialized_agents.py
+├── 📁 archive/
+│   ├── 📄 generate_report_v1.py
+│   └── 📄 generate_report_v2.py
+├── 📁 assets/
+├── 📁 powerbi_generator/
+│   ├── 📄 __init__.py
+│   └── 📄 pbip_generator.py
+├── 📄 __init__.py
+├── 📄 config.yaml
+├── 📄 example_usage.py
+├── 📄 generate_report_v3.py
+├── 📄 LICENSE
+├── 📄 README.md
+├── 📄 requirements.txt
+└── 📄 workflow_orchestrator.py
+
 
 ### Development Setup
 1. Install development dependencies:
@@ -717,58 +730,6 @@ Please follow these steps:
 3. Commit your changes (`git commit -m 'Add amazing feature'`)
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
-
-### Future Updates List 📋
-
-### 1. Syntax and Logging Fixes 🔧
-- Fix unclosed logger handler list in `logging.basicConfig()` 🔌
-- Correct function definitions missing colons (using `->` instead of `->`) ✏️
-
-### 2. Configuration Management ⚙️
-- Replace deeply nested defaults with YAML schema file 📄
-- Implement Pydantic's Settings functionality for configuration validation and overrides ✅
-
-### 3. Connector Factory and DRY Principles 🏭
-- Introduce a ConnectorFactory to map types to classes 🗺️
-- Extract common logic into base Connector class 🧩
-- Refactor `_initialize_data_source_connectors` to use the factory 🔄
-
-### 4. Resource Cleanup and Context Managers 🧹
-- Add missing `disconnect()` calls on error paths 🚫
-- Implement context managers for connectors to ensure proper cleanup 🔄
-
-### 5. Error Handling and Logging 🚨
-- Replace broad `except Exception` with specific exception types 🎯
-- Implement proper exception traceback logging with `logger.exception(...)` 📊
-
-### 6. Security and Sensitive Data 🔒
-- Apply `sanitize_log_data()` to all exception messages before logging 🧼
-- Replace environment variables with Azure/Key Vault or AWS Secrets Manager for credentials 🛡️
-
-## 7. Rate Limiting and Concurrency ⏱️
-- Make RateLimiter and AutoScaler thread-safe with proper locking 🔒
-- Consider using existing libraries (tokensbucket, ratelimit) instead of custom implementation 📚
-
-### 8. Simplify Report Generation Workflow 📊
-- Break monolithic `PowerBIReportGenerator.generate_report` into smaller private methods:
-  - `_detect_drift` 🔍
-  - `_select_tables` 📋
-  - `_profile_data` 📈
-  - `_build_report` 🏗️
-
-### 9. Testing and Validation 🧪
-- Write comprehensive unit tests for:
-  - Each connector class 🔌
-  - Data profiler 📊
-  - Schema drift detector 🔍
-  - Main workflow 🔄
-- Implement mocks for external dependencies (database, OpenAI, Fabric) 🎭
-
-### 10. Documentation and Typing 📖
-- Add comprehensive docstrings with parameter and return descriptions 📝
-- Complete type hints for all public methods and classes 🔤
-- Separate CLI entrypoint into its own module 🖥️
-- Implement proper CLI using `argparse` or `click` 🎛️
 
 ### Development Guidelines
 - Follow PEP 8 style guidelines

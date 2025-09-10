@@ -5293,3 +5293,23 @@ if __name__ == "__main__":
         
         # Shutdown
         report_generator.shutdown()
+
+
+from workflow_orchestrator import PowerBIWorkflowOrchestrator
+
+class EnhancedPowerBIReportGenerator(PowerBIReportGenerator):
+    def __init__(self, config_path: str = "config.yaml"):
+        super().__init__(config_path)
+        # Add agentic workflow capabilities
+        self.workflow_orchestrator = PowerBIWorkflowOrchestrator(self.config)
+    
+    async def generate_report_with_agents(self, requirements: str, data_source_name: str):
+        """Enhanced report generation using AI agents."""
+        data_source_configs = [self.config['data_sources'][data_source_name]]
+        
+        return await self.workflow_orchestrator.execute_powerbi_development(
+            requirements=requirements,
+            data_source_configs=data_source_configs,
+            workflow_type="main_powerbi_development",
+            output_path="./output"
+        )

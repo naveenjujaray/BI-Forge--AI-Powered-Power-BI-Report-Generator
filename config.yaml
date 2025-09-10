@@ -285,3 +285,96 @@ sandbox_path: "/tmp/sandbox"
 enable_fabric_deployment: true
 enable_langsmith: true
 enable_real_time_refresh: true
+
+# OpenAI Configuration
+openai:
+  api_key: "${OPENAI_API_KEY}"
+  model: "gpt-4"
+  temperature: 0.2
+  max_tokens: 4000
+  max_retries: 3
+  use_azure: false
+  # Azure OpenAI specific (if use_azure: true)
+  azure_endpoint: ""
+  azure_version: "2023-12-01-preview"
+
+# Microsoft Fabric Configuration
+fabric:
+  tenant_id: "${FABRIC_TENANT_ID}"
+  client_id: "${FABRIC_CLIENT_ID}"
+  client_secret: "${FABRIC_CLIENT_SECRET}"
+  workspace_id: "${FABRIC_WORKSPACE_ID}"
+  api_endpoint: "https://api.fabric.microsoft.com/v1"
+
+# Data Sources Configuration
+data_sources:
+  sample_sql:
+    type: "sql_server"
+    server: "localhost"
+    database: "SampleDB"
+    username: "${DB_USERNAME}"
+    password: "${DB_PASSWORD}"
+    connection_pool_size: 5
+    connection_timeout: 30
+
+# Quality Thresholds
+quality_threshold: 75
+data_quality:
+  enabled: true
+  max_null_percentage: 20.0
+  max_duplicate_percentage: 10.0
+  check_outliers: true
+  outlier_method: "zscore"
+  outlier_threshold: 3.0
+
+# Monitoring and Observability
+monitoring:
+  redis_url: "${REDIS_URL:-redis://localhost:6379}"
+  circuit_breaker_timeout: 60
+  rate_limit_requests: 100
+  rate_limit_period: 60
+  enable_advanced_monitoring: true
+  performance_benchmarking: true
+  data_lineage_tracking: true
+
+# Agent Configuration
+agents:
+  timeout_seconds: 300
+  max_retries: 3
+  enable_parallel_execution: true
+
+# Workflow Configuration
+workflows:
+  default_max_iterations: 10
+  enable_quality_gates: true
+  auto_remediation: true
+  human_approval_required: false
+
+# Output Configuration
+output:
+  default_path: "./powerbi_projects"
+  backup_existing: true
+  compress_output: false
+  include_documentation: true
+
+# Security Configuration
+security:
+  encrypt_sensitive_data: true
+  audit_logging: true
+  api_key_rotation_days: 90
+
+# Deployment Configuration
+deployment:
+  environments:
+    development:
+      workspace_id: "${DEV_WORKSPACE_ID}"
+      requires_approval: false
+      auto_refresh: true
+    test:
+      workspace_id: "${TEST_WORKSPACE_ID}"
+      requires_approval: true
+      auto_refresh: true
+    production:
+      workspace_id: "${PROD_WORKSPACE_ID}"
+      requires_approval: true
+      auto_refresh: false
