@@ -309,22 +309,28 @@ class AgentCommunicationBus:
         if agent_name not in self.subscribers[event_type]:
             self.subscribers[event_type].append(agent_name)
     
+
     async def send_message(self, message: AgentMessage) -> Optional[AgentMessage]:
-        """Send a message to a specific agent."""
+        """Send a message to a specific agent with retry logic."""
         if message.receiver not in self.agents:
             logger.error(f"Agent {message.receiver} not found")
             return None
         
         self.message_history.append(message)
         
-        try:
-            response = await self.agents[message.receiver].process_message(message)
-            if response:
-                self.message_history.append(response)
-            return response
-        except Exception as e:
-            logger.error(f"Error sending message to {message.receiver}: {str(e)}")
-            return None
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = await self.agents[message.receiver].process_message(message)
+                if response:
+                    self.message_history.append(response)
+                return response
+            except Exception as e:
+                logger.warning(f"Attempt {attempt + 1} failed for message to {message.receiver}: {str(e)}")
+                if attempt == max_retries - 1:
+                    logger.error(f"Failed to deliver message after {max_retries} attempts")
+                    return None
+                await asyncio.sleep(1 * (attempt + 1))  # Exponential backoff
     
     async def broadcast_event(self, event_type: str, content: Dict[str, Any], sender: str = "system"):
         """Broadcast an event to all subscribed agents."""

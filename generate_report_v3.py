@@ -171,6 +171,78 @@ def start_metrics_server(port: int = 8000) -> None:
     except Exception as e:
         logger.error(f"Failed to start Prometheus metrics server: {str(e)}")
 
+# In generate_report_v3.py, add robust API client
+class APIClient:
+    def __init__(self, base_url: str, timeout: int = 30, max_retries: int = 3):
+        self.base_url = base_url
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self.session = requests.Session()
+        
+        # Configure retry strategy
+        retry_strategy = tenacity.retry(
+            stop=tenacity.stop_after_attempt(max_retries),
+            wait=tenacity.wait_exponential(multiplier=1, min=4, max=10),
+            retry=tenacity.retry_if_exception_type((requests.exceptions.Timeout, 
+                                                     requests.exceptions.ConnectionError))
+        )
+        
+        self.get_with_retry = retry_strategy(self._get)
+        self.post_with_retry = retry_strategy(self._post)
+    
+    def _get(self, endpoint: str, params: Dict = None):
+        response = self.session.get(
+            f"{self.base_url}/{endpoint}",
+            params=params,
+            timeout=self.timeout
+        )
+        response.raise_for_status()
+        return response.json()
+    
+    def _post(self, endpoint: str, data: Dict):
+        response = self.session.post(
+            f"{self.base_url}/{endpoint}",
+            json=data,
+            timeout=self.timeout
+        )
+        response.raise_for_status()
+        return response.json()
+    
+    # In generate_report_v3.py, add memory management utilities
+def process_data_in_chunks(data: pd.DataFrame, process_func: Callable, chunk_size: int = 10000):
+    """Process large DataFrames in chunks to avoid memory issues."""
+    chunks = [data[i:i + chunk_size] for i in range(0, data.shape[0], chunk_size)]
+    results = []
+    
+    for chunk in chunks:
+        try:
+            result = process_func(chunk)
+            results.append(result)
+            # Explicitly free memory
+            del chunk
+            gc.collect()
+        except Exception as e:
+            logger.error(f"Error processing chunk: {str(e)}")
+            continue
+    
+    return pd.concat(results) if results else pd.DataFrame()
+
+# Example usage in DataAnalystAgent
+def analyze_large_dataset(self, df: pd.DataFrame) -> Dict[str, Any]:
+    """Analyze large dataset with memory management."""
+    
+    def process_chunk(chunk: pd.DataFrame) -> pd.DataFrame:
+        # Process each chunk
+        return chunk.describe()
+    
+    # Process in chunks
+    summary_stats = process_data_in_chunks(df, chunk_size=5000, process_func=process_chunk)
+    
+    return {
+        "status": "success",
+        "summary_stats": summary_stats.to_dict(),
+        "rows_processed": len(df)
+    }
 # === Configuration Models with Pydantic ===
 class AIConfig(BaseModel):
     api_key: str
@@ -267,7 +339,7 @@ class DataSourceConfig(BaseModel):
             'sql_server','postgresql','mysql','csv','excel','api',
             'bigquery','salesforce','s3','redshift','onelake','semantic_model',
             'oracle','snowflake','mongodb','synapse','kafka','event_hub'
-        ],
+        ]
         if v not in allowed_types:
             raise ValueError(f'Invalid source_type: {v}. Allowed types: {", ".join(allowed_types)}')
         return v
@@ -495,7 +567,7 @@ def sanitize_log_data(data: str) -> str:
 def encrypt_sensitive_data(data: str, key: str) -> str:
     """Encrypt sensitive data using AES."""
     salt = secrets.token_bytes(16)
-    kdf = PBKDF2(key, salt, dkLen=32, count=200000)  # Increased iterations
+    kdf = PBKDF2(key, salt, dkLen=32, count=600000)  # Increased iterations
     cipher = AES.new(kdf, AES.MODE_CBC)
     ct_bytes = cipher.encrypt(pad(data.encode(), AES.block_size))
     return base64.b64encode(salt + cipher.iv + ct_bytes).decode('utf-8')
@@ -588,7 +660,11 @@ class RealTimeDataProcessor:
                     group_id=self.consumer_group,
                     auto_offset_reset='earliest',
                     enable_auto_commit=True,
-                    value_deserializer=lambda x: json.loads(x.decode('utf-8'))
+                    value_deserializer=lambda x: json.loads(x.decode('utf-8')),
+                     # Add connection timeout and retry settings
+                    connections_max_idle_ms=300000,
+                    request_timeout_ms=30000,
+                    retry_backoff_ms=100,
                 )
                 
                 self.kafka_producer = KafkaProducer(
@@ -598,6 +674,8 @@ class RealTimeDataProcessor:
                 logger.info("Kafka clients initialized successfully")
             except Exception as e:
                 logger.error(f"Failed to initialize Kafka clients: {str(e)}")
+                  # Implement fallback mechanism
+                self.enabled = False
         
         if self.event_hub_connection_string:
             try:
@@ -5088,7 +5166,57 @@ Return the report as a JSON object with the following structure:
                 logger.error(f"Error disconnecting data source: {str(e)}")
         
         logger.info("Power BI Report Generator shutdown complete")
+# In generate_report_v3.py, enhance logging configuration
+def setup_enhanced_logging():
+    """Set up enhanced logging with structured output."""
+    import structlog
+    
+    # Configure structlog
+    structlog.configure(
+        processors=[
+            structlog.stdlib.filter_by_level,
+            structlog.stdlib.add_logger_name,
+            structlog.stdlib.add_log_level,
+            structlog.stdlib.PositionalArgumentsFormatter(),
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.StackInfoRenderer(),
+            structlog.processors.format_exc_info,
+            structlog.processors.UnicodeDecoder(),
+            structlog.processors.JSONRenderer()
+        ],
+        context_class=dict,
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        cache_logger_on_first_use=True,
+    )
+    
+    # Create loggers
+    logger = structlog.get_logger("powerbi_generator")
+    
+    # Add file handler with rotation
+    from logging.handlers import RotatingFileHandler
+    
+    file_handler = RotatingFileHandler(
+        'powerbi_generator.log',
+        maxBytes=10 * 1024 * 1024,  # 10MB
+        backupCount=5
+    )
+    file_handler.setFormatter(logging.Formatter('%(message)s'))
+    
+    # Add console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(logging.Formatter('%(message)s'))
+    
+    # Configure root logger
+    logging.basicConfig(
+        level=logging.INFO,
+        handlers=[file_handler, console_handler]
+    )
+    
+    return logger
 
+# Replace all logger instances with structured logger
+logger = setup_enhanced_logging()
 # === FastAPI App (if enabled) ===
 def create_app(config: Dict[str, Any]) -> FastAPI:
     """Create FastAPI app if API is enabled."""

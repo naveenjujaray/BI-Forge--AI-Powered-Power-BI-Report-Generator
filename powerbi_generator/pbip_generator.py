@@ -224,11 +224,14 @@ class PBIPGenerator:
         
         return model_bim
     
-    def _create_table_definition(self, table_name: str, table_info: Dict[str, Any], 
-                               tables_dir: str) -> str:
+    # In pbip_generator.py, line ~450
+    def _create_table_definition(self, table_name: str, table_info: Dict[str, Any], tables_dir: str) -> str:
         """Create individual table definition file."""
+        # Sanitize table name for file system
+        safe_table_name = "".join(c if c.isalnum() else "_" for c in table_name)
+        
         table_def = {
-            "name": table_name,
+            "name": table_name,  # Keep original name for Power BI
             "description": table_info.get('description', f"Table containing {table_name} data"),
             "columns": table_info.get('columns', []),
             "partitions": [
@@ -243,7 +246,7 @@ class PBIPGenerator:
             ]
         }
         
-        table_file = os.path.join(tables_dir, f"{table_name}.json")
+        table_file = os.path.join(tables_dir, f"{safe_table_name}.json")
         with open(table_file, 'w', encoding='utf-8') as f:
             json.dump(table_def, f, indent=2)
         
