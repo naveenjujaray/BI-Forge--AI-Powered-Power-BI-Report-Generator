@@ -5,8 +5,8 @@ from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage
 
 from .agent_framework import BaseAIAgent, AgentType, AgentTask, TaskStatus
-from ..data_profiler import DataProfiler
-from ..schema_drift_detector import SchemaDriftDetector
+from ..data_profiler import DataProfiler # type: ignore
+# from ..schema_drift_detector import SchemaDriftDetector
 
 class DataAnalystAgent(BaseAIAgent):
     """Agent specialized in data analysis and profiling."""
